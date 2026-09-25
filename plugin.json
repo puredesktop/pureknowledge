@@ -1,0 +1,261 @@
+{
+  "id": "knowledge",
+  "name": "PureKnowledge",
+  "permissions": [
+    "filesystem",
+    "settings",
+    "agents",
+    "assets"
+  ],
+  "entrypoint": {
+    "kind": "dev-url",
+    "url": "http://localhost:5188"
+  },
+  "app": {
+    "id": "plugin.knowledge",
+    "slug": "knowledge",
+    "name": "PureKnowledge",
+    "navigationLabel": "Knowledge",
+    "productName": "pure.knowledge",
+    "kind": "knowledge",
+    "description": "Capture notes, curate wiki pages, and connect knowledge to suite resources.",
+    "openableFileKinds": [
+      "folder",
+      "markdown",
+      "text"
+    ],
+    "openableExtensions": [
+      "md",
+      "markdown",
+      "txt"
+    ],
+    "openableNameSuffixes": [
+      ".knowledge"
+    ],
+    "agents": {
+      "tools": [
+        {
+          "name": "getKnowledgeContext",
+          "risk": "read",
+          "description": "Call this first: compact context for the knowledge base \u2014 active space and page, every space with its page count, wiki/note totals, and the store path. Ground page and space references here before using the other tools.",
+          "requiresApproval": false,
+          "inputSchema": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        {
+          "name": "searchKnowledge",
+          "risk": "read",
+          "description": "Search the knowledge base across titles, aliases, tags, page bodies, slugs, wikilinks, and resource links \u2014 the same ranking the sidebar search uses. Empty query lists the most recently updated pages plus the space overview. getKnowledgeContext names the active space.",
+          "requiresApproval": false,
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string"
+              },
+              "limit": {
+                "type": "number"
+              },
+              "space": {
+                "type": "string",
+                "description": "Limit results to one space, by id or name. listSpaces names them."
+              }
+            }
+          }
+        },
+        {
+          "name": "readKnowledgePage",
+          "risk": "read",
+          "description": "Read one knowledge page in full by id, slug, title, or alias. getKnowledgeContext and searchKnowledge supply the references.",
+          "requiresApproval": false,
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "page"
+            ]
+          }
+        },
+        {
+          "name": "listSpaces",
+          "risk": "read",
+          "description": "List knowledge spaces with page counts and which is active.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {}
+          },
+          "requiresApproval": false
+        },
+        {
+          "name": "getBacklinks",
+          "risk": "read",
+          "description": "List the pages whose bodies wikilink to one page. Read before a rename, merge, or delete \u2014 these are the pages the change ripples through.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "page"
+            ]
+          },
+          "requiresApproval": false
+        },
+        {
+          "name": "listKnowledgeActivity",
+          "risk": "read",
+          "description": "Recent knowledge-base activity, newest first: page edits, promotions, link additions, and agent writes, with the human or agent actor. Optionally scoped to one page.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "string"
+              },
+              "limit": {
+                "type": "number"
+              }
+            }
+          },
+          "requiresApproval": false
+        },
+        {
+          "name": "reviewKnowledge",
+          "risk": "read",
+          "description": "Curation sweep over a space: broken wikilinks, orphan pages, stale pages, and duplicate titles. Read-only \u2014 apply the fixes worth making with applyKnowledgeChange; destructive ones at the user's direction.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "space": {
+                "type": "string"
+              }
+            }
+          },
+          "requiresApproval": false
+        },
+        {
+          "name": "applyKnowledgeChange",
+          "risk": "destructive",
+          "description": "Write a change to the wiki directly: create a page, update, rename, promote a note to wiki, merge into another page, or delete. Body is markdown; [[Page name]] creates wikilinks. Every write is recorded in the agent log with before/after and in the suite operations ledger. Call getKnowledgeContext first to ground the space and page.",
+          "requiresApproval": true,
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "body": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "string"
+              },
+              "agentName": {
+                "type": "string"
+              },
+              "parent": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "wiki",
+                  "note"
+                ]
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "create",
+                  "update",
+                  "rename",
+                  "promote",
+                  "delete",
+                  "merge"
+                ],
+                "description": "What to write. Defaults to update when page names an existing page, create otherwise. rename needs the new title; promote turns a note into a wiki page; merge needs into (the surviving page) and body (its merged content); delete removes the page (and its children)."
+              },
+              "into": {
+                "type": "string",
+                "description": "merge only: the surviving page (id, slug, title, or alias) the page merges into."
+              },
+              "links": {
+                "type": "array",
+                "description": "Resource links to attach on accept: files, app resources, or URLs the page concerns.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "file",
+                        "app",
+                        "url",
+                        "resource"
+                      ]
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "appSlug": {
+                      "type": "string"
+                    },
+                    "resourceId": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "title"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "body",
+              "summary"
+            ]
+          }
+        },
+        {
+          "name": "listKnowledgeChanges",
+          "risk": "read",
+          "description": "The agent log: recent agent writes to the wiki, newest first, with change type, actor, and summary. Check before repeating work another agent already did.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "limit": {
+                "type": "number"
+              }
+            }
+          },
+          "requiresApproval": false
+        }
+      ]
+    },
+    "acceptedDragKinds": [
+      "image",
+      "reference",
+      "webpage",
+      "video"
+    ]
+  }
+}
