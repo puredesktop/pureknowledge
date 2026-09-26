@@ -9,7 +9,7 @@ A note and wiki workspace for capturing knowledge, organizing pages, and connect
 | **Sidebar** | Browse and select pages and knowledge resources. |
 | **Page editor** | Read and edit the current page’s content. |
 | **Page context** | Inspect page metadata and related activity or resources. |
-| **Review area** | Review proposed content changes before incorporating them into your knowledge. |
+| **Review area** | Inspect activity and recorded agent changes, including their before/after content. |
 
 ## Working with pureknowledge
 
