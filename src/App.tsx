@@ -58,7 +58,7 @@ import {
   type ReactNode,
 } from 'react'
 import { usePlatformDeepLink } from '@purescience/platform-ui/bridge/react/usePlatformDeepLink'
-import { styled } from 'styled-components'
+import { createGlobalStyle, styled } from 'styled-components'
 import {
   catalogOpen,
   recordOperation,
@@ -123,6 +123,42 @@ const SPACE_ROOT_CRUMB = '__space-root__'
 
 type KnowledgeView = 'wiki' | 'agent-review'
 type AgentReviewSort = 'newest' | 'agent'
+
+// Scope the compact treatment to this confirmation, including its portal.
+const DeleteDialogStyle = createGlobalStyle`
+  [data-selector='modal']:has(> .knowledge-delete-body) {
+    height: auto;
+    min-height: 0;
+    max-width: min(420px, calc(100vw - 32px));
+    background: var(--glass-panel, var(--platform-colors-elevated));
+    backdrop-filter: var(--glass-blur, blur(24px) saturate(140%));
+    -webkit-backdrop-filter: var(--glass-blur, blur(24px) saturate(140%));
+  }
+
+  .knowledge-delete-body {
+    padding: 20px;
+    overflow-y: auto;
+  }
+
+  .knowledge-delete-body p {
+    margin: 0;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  .knowledge-delete-body p + p {
+    margin-top: 8px;
+    color: var(--platform-colors-text-secondary);
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    [data-selector='modal']:has(> .knowledge-delete-body) {
+      background: var(--platform-colors-elevated);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+  }
+`
 
 //#region styled-components
 
@@ -1427,6 +1463,7 @@ function KnowledgeWorkspace({
   const [deleteCandidate, setDeleteCandidate] = useState<KnowledgePage | null>(
     null,
   )
+  const cancelDeleteRef = useRef<HTMLButtonElement>(null)
   const spaceMenuRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!spaceMenuOpen) return
@@ -2065,25 +2102,30 @@ function KnowledgeWorkspace({
         editRequest={editRequest}
       />
       {deleteCandidate ? (
-        <Modal
-          open
-          onClose={() => setDeleteCandidate(null)}
-          title="Delete page"
-          size="sm"
-        >
-          <p>
-            Delete “{deleteCandidate.title}” and its child pages? This cannot
-            be undone.
-          </p>
-          <StyledChipRow style={{ justifyContent: 'flex-end', marginTop: 16 }}>
-            <Button variant="ghost" onClick={() => setDeleteCandidate(null)}>
-              Cancel
-            </Button>
-            <Button variant="primary" onClick={confirmDeletePage}>
-              Delete
-            </Button>
-          </StyledChipRow>
-        </Modal>
+        <>
+          <DeleteDialogStyle />
+          <Modal
+            open
+            onClose={() => setDeleteCandidate(null)}
+            title="Delete page?"
+            size="xs"
+            bodyClassName="knowledge-delete-body"
+            initialFocusRef={cancelDeleteRef}
+          >
+            <p>
+              Delete <strong>“{deleteCandidate.title}”</strong> and its child pages?
+            </p>
+            <p>This cannot be undone.</p>
+            <StyledChipRow style={{ justifyContent: 'flex-end', marginTop: 16 }}>
+              <Button ref={cancelDeleteRef} variant="subtle" onClick={() => setDeleteCandidate(null)}>
+                Cancel
+              </Button>
+              <Button variant="danger" onClick={confirmDeletePage}>
+                Delete
+              </Button>
+            </StyledChipRow>
+          </Modal>
+        </>
       ) : null}
       {activeView === 'agent-review' ? (
         <>
