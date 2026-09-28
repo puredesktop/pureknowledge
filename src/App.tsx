@@ -1,3 +1,4 @@
+import { MenuButtonDropdown } from '@purescience/platform-ui/components/common/dropdown/MenuButtonDropdown'
 import { CollectionImage } from '@purescience/platform-editor/extensions/collectionImage.ts'
 import { useKnowledgeDrop } from './hooks/useKnowledgeDrop'
 import { embedKnowledgeVideos } from './lib/knowledgeDrop'
@@ -25,6 +26,7 @@ import { SegmentedControl } from '@purescience/platform-ui/components/common/but
 import { TextField } from '@purescience/platform-ui/components/common/inputs/TextField'
 import { WorkspacePicker } from '@purescience/platform-ui/components/common/inputs/WorkspacePicker'
 import {
+  MoreHorizontal,
   ChevronDown,
   Clock,
   ChevronRight,
@@ -348,7 +350,7 @@ const StyledTreeItem = styled.div`
 const StyledPageRow = styled.div<{ $active: boolean; $depth?: number }>`
   position: relative;
   display: grid;
-  grid-template-columns: 18px 22px minmax(0, 1fr) 28px;
+  grid-template-columns: 18px 22px minmax(0, 1fr) 24px 28px;
   align-items: center;
   gap: var(--pureknowledge-space-xs);
   width: 100%;
@@ -379,17 +381,6 @@ const StyledPageRow = styled.div<{ $active: boolean; $depth?: number }>`
 
   &:hover {
     background: var(--pure-chrome-hover);
-  }
-
-  &:hover .tree-tools,
-  &:focus-within .tree-tools {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  &:hover .tree-count,
-  &:focus-within .tree-count {
-    opacity: 0;
   }
 `
 
@@ -503,33 +494,16 @@ const StyledTreeAction = styled.button`
 `
 
 const StyledTreeTools = styled.div`
-  position: absolute;
-  right: 10px;
-  top: 50%;
-  z-index: 1;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 2px;
-  justify-content: flex-end;
-  max-width: calc(100% - 64px);
-  padding: 2px;
-  border-radius: var(--pureknowledge-radius-panel);
-  background: var(--pureknowledge-panel);
-  box-shadow: var(--platform-shadow-sm);
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(-50%);
-  transition: opacity 120ms ease;
-`
-
-const StyledInlineTreeAction = styled(StyledTreeAction)`
-  flex: 0 0 auto;
+  justify-content: center;
   width: 28px;
-  height: 28px;
+  min-width: 0;
 
-  svg {
-    width: 16px;
-    height: 16px;
+  button {
+    width: 28px;
+    height: 28px;
+    min-width: 0;
   }
 `
 
@@ -1969,7 +1943,7 @@ function KnowledgeWorkspace({
                       onClick={() => selectPage(page.id)}
                       onDoubleClick={toggleDirectory}
                     >
-                      <StyledPageTitle>
+                      <StyledPageTitle title={page.title}>
                         {pageDisplayTitle(page, activeSpace.rootPageId)}
                       </StyledPageTitle>
                     </StyledPageSelect>
@@ -1978,41 +1952,25 @@ function KnowledgeWorkspace({
                         ? `${childCount}`
                         : extractWikiLinks(page.body).length || ''}
                     </StyledPageMeta>
-                    <StyledTreeTools className="tree-tools">
-                      <StyledInlineTreeAction
-                        type="button"
-                        title={`Add page under ${page.title}`}
-                        aria-label={`Add page under ${page.title}`}
-                        onClick={() => startChildPage(page.id, 'page')}
-                      >
-                        <AddPageIcon />
-                      </StyledInlineTreeAction>
-                      <StyledInlineTreeAction
-                        type="button"
-                        title={`Add directory under ${page.title}`}
-                        aria-label={`Add directory under ${page.title}`}
-                        onClick={() => startChildPage(page.id, 'directory')}
-                      >
-                        <AddFolderIcon />
-                      </StyledInlineTreeAction>
-                      <StyledInlineTreeAction
-                        type="button"
-                        title={`Edit ${page.title}`}
-                        aria-label={`Edit ${page.title}`}
-                        onClick={() => editTreePage(page.id)}
-                      >
-                        <EditIcon />
-                      </StyledInlineTreeAction>
-                      {page.id === activeSpace.rootPageId ? null : (
-                        <StyledInlineTreeAction
-                          type="button"
-                          title={`Delete ${page.title}`}
-                          aria-label={`Delete ${page.title}`}
-                          onClick={() => deleteTreePage(page)}
-                        >
-                          <TrashIcon />
-                        </StyledInlineTreeAction>
-                      )}
+                    <StyledTreeTools>
+                      <MenuButtonDropdown
+                        label={`Page actions for ${page.title}`}
+                        icon={MoreHorizontal}
+                        items={[
+                          { id: 'add-page', label: 'Add page', icon: <AddPageIcon /> },
+                          { id: 'add-directory', label: 'Add directory', icon: <AddFolderIcon /> },
+                          { id: 'edit', label: 'Edit page', icon: <EditIcon /> },
+                          ...(page.id === activeSpace.rootPageId ? [] : [
+                            { id: 'delete', label: 'Delete page', icon: <TrashIcon />, tone: 'danger' as const },
+                          ]),
+                        ]}
+                        onSelectItem={({ id }) => {
+                          if (id === 'add-page') startChildPage(page.id, 'page')
+                          else if (id === 'add-directory') startChildPage(page.id, 'directory')
+                          else if (id === 'edit') editTreePage(page.id)
+                          else if (id === 'delete') deleteTreePage(page)
+                        }}
+                      />
                     </StyledTreeTools>
                   </StyledPageRow>
                   {newChildParentId === page.id ? (
