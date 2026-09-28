@@ -53,6 +53,31 @@ describe('prepareKnowledgeDocumentHtml', () => {
     })
   })
 
+  it('loads package assets inside a durable gallery block', async () => {
+    const readBinary = vi.fn(async (path: string) => ({
+      mimeType: path.endsWith('.svg') ? 'image/svg+xml' : 'image/png',
+      base64: 'aW1hZ2U=',
+    }))
+    const result = await prepareKnowledgeDocumentHtml(
+      [
+        ':::gallery size=88 columns=6',
+        '![App tile](assets/tile.svg)',
+        '![Screenshot](assets/screenshot.png)',
+        ':::',
+      ].join('\n'),
+      '/wiki/brand.knowledge',
+      readBinary,
+    )
+    const container = document.createElement('div')
+    container.innerHTML = result.html
+    const gallery = container.querySelector<HTMLElement>('[data-knowledge-gallery]')!
+    expect(gallery.dataset.thumbnailSize).toBe('88')
+    expect(gallery.dataset.galleryColumns).toBe('6')
+    expect(gallery.querySelectorAll('img[data-knowledge-image-preview]')).toHaveLength(2)
+    expect(readBinary).toHaveBeenCalledTimes(2)
+    expect(result.imageFailures).toEqual([])
+  })
+
   it('reports a failed asset by its package-relative path without hiding the page', async () => {
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     const readBinary = vi.fn(async (path: string) => {

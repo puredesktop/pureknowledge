@@ -6,7 +6,19 @@ import {
   prepareKnowledgeDocumentHtml,
   readKnowledgeImagePreview,
 } from './lib/knowledgeDocumentHtml'
-import { normalizeCollectionDocumentHtml } from '@purescience/platform-ui/bridge/collectionDocumentHtml'
+import {
+  KnowledgeGallery,
+  KnowledgeFigure,
+  addKnowledgeGalleryControls,
+  appendKnowledgeGalleryImages,
+  knowledgeHtmlToMarkdown,
+  knowledgeMarkdownToHtml,
+  removeKnowledgeGalleryImage,
+  setKnowledgeGalleryImageBackground,
+  upgradeLegacyKnowledgeGalleries,
+  type GalleryImageBackground,
+} from './lib/knowledgeGallery'
+import { saveKnowledgeImage } from './bridge/knowledgeAssets'
 import { readPlatformFileBinary } from '@purescience/platform-ui/bridge/fs'
 import { toMd, type DocumentEditorHandle } from '@purescience/platform-editor'
 import { Badge } from '@purescience/platform-ui/components/common/feedback/Badge'
@@ -56,6 +68,7 @@ import {
   useCallback,
   useMemo,
   useState,
+  type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
   type MouseEvent,
@@ -1086,6 +1099,137 @@ const StyledImagePreview = styled.figure`
 
 // A wiki page is read: the platform reading surface (serif 16/1.7, 72ch).
 const StyledWikiBody = styled(ReadingSurface)`
+  [data-knowledge-gallery] {
+    display: grid;
+    grid-template-columns: repeat(
+      auto-fill,
+      minmax(min(100%, var(--knowledge-gallery-size, 96px)), 1fr)
+    );
+    gap: var(--pureknowledge-space-lg);
+    align-items: start;
+  }
+
+  [data-knowledge-gallery][data-gallery-columns] {
+    grid-template-columns: repeat(
+      var(--knowledge-gallery-columns),
+      minmax(0, 1fr)
+    );
+  }
+
+  [data-knowledge-gallery] figure {
+    position: relative;
+    display: grid;
+    justify-items: center;
+    gap: var(--pureknowledge-space-xs);
+    min-width: 0;
+    margin: 0;
+  }
+
+  [data-knowledge-gallery] img {
+    width: var(--knowledge-gallery-size, 96px);
+    max-width: 100%;
+    max-height: var(--knowledge-gallery-size, 96px);
+    margin: 0;
+    object-fit: contain;
+  }
+
+  [data-knowledge-gallery] figcaption {
+    max-width: 100%;
+    color: var(--pureknowledge-content-muted);
+    font-family: var(--platform-typography-font-family);
+    font-size: var(--pureknowledge-font-size-meta);
+    line-height: 1.35;
+    text-align: center;
+    overflow-wrap: anywhere;
+  }
+
+  [data-gallery-background='light'] img {
+    padding: var(--pureknowledge-space-sm);
+    border-radius: var(--pureknowledge-radius-control);
+    background: #fff;
+  }
+
+  [data-gallery-background='dark'] img {
+    padding: var(--pureknowledge-space-sm);
+    border-radius: var(--pureknowledge-radius-control);
+    background: #111;
+  }
+
+  [data-gallery-background='checkerboard'] img {
+    padding: var(--pureknowledge-space-sm);
+    border-radius: var(--pureknowledge-radius-control);
+    background-color: #fff;
+    background-image:
+      linear-gradient(45deg, #d7d7d7 25%, transparent 25%),
+      linear-gradient(-45deg, #d7d7d7 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #d7d7d7 75%),
+      linear-gradient(-45deg, transparent 75%, #d7d7d7 75%);
+    background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+    background-size: 12px 12px;
+  }
+
+  .knowledge-gallery-toolbar {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .knowledge-gallery-toolbar button,
+  .knowledge-gallery-image-controls button {
+    border: 1px solid var(--pureknowledge-content-border);
+    border-radius: var(--pureknowledge-radius-control);
+    background: color-mix(in srgb, var(--pureknowledge-content-bg) 90%, transparent);
+    color: var(--pureknowledge-content-muted);
+    font: 500 var(--pureknowledge-font-size-meta) / 1.2 var(--platform-typography-font-family);
+    cursor: pointer;
+  }
+
+  .knowledge-gallery-toolbar button {
+    padding: 6px 9px;
+  }
+
+  .knowledge-gallery-image-controls {
+    display: flex;
+    gap: 4px;
+    max-width: 100%;
+  }
+
+  .knowledge-gallery-image-controls button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+  }
+
+  .knowledge-gallery-image-controls svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .knowledge-gallery-image-controls [data-gallery-background] svg path {
+    fill: currentColor;
+    stroke: none;
+    opacity: 0.45;
+  }
+
+  .knowledge-gallery-image-controls .knowledge-gallery-remove:hover {
+    border-color: var(--platform-colors-danger, #b42318);
+    color: var(--platform-colors-danger, #b42318);
+  }
+
+  .knowledge-gallery-toolbar button:hover,
+  .knowledge-gallery-image-controls button:hover {
+    background: var(--pureknowledge-content-subtle);
+    color: var(--pureknowledge-content-text);
+  }
+
   img {
     display: block;
     max-width: 100%;
@@ -1215,6 +1359,73 @@ const StyledKnowledgeEditorFrame = styled.div`
     line-height: var(--pureknowledge-line-height-content);
     color: var(--pureknowledge-content-text);
   }
+
+  .knowledge-page-editor [data-knowledge-gallery] {
+    display: grid;
+    grid-template-columns: repeat(
+      auto-fill,
+      minmax(min(100%, var(--knowledge-gallery-size, 96px)), 1fr)
+    );
+    gap: var(--pureknowledge-space-lg);
+    align-items: start;
+    margin: 0 0 var(--pureknowledge-space-lg);
+  }
+
+  .knowledge-page-editor [data-knowledge-gallery][data-gallery-columns] {
+    grid-template-columns: repeat(
+      var(--knowledge-gallery-columns),
+      minmax(0, 1fr)
+    );
+  }
+
+  .knowledge-page-editor [data-knowledge-gallery] figure {
+    display: grid;
+    justify-items: center;
+    gap: var(--pureknowledge-space-xs);
+    min-width: 0;
+    margin: 0;
+  }
+
+  .knowledge-page-editor [data-knowledge-gallery] img {
+    width: var(--knowledge-gallery-size, 96px);
+    max-width: 100%;
+    max-height: var(--knowledge-gallery-size, 96px);
+    object-fit: contain;
+  }
+
+  .knowledge-page-editor [data-knowledge-gallery] figcaption {
+    max-width: 100%;
+    color: var(--pureknowledge-content-muted);
+    font-size: var(--pureknowledge-font-size-meta);
+    line-height: 1.35;
+    text-align: center;
+    overflow-wrap: anywhere;
+  }
+
+  .knowledge-page-editor [data-gallery-background='light'] img {
+    padding: var(--pureknowledge-space-sm);
+    border-radius: var(--pureknowledge-radius-control);
+    background: #fff;
+  }
+
+  .knowledge-page-editor [data-gallery-background='dark'] img {
+    padding: var(--pureknowledge-space-sm);
+    border-radius: var(--pureknowledge-radius-control);
+    background: #111;
+  }
+
+  .knowledge-page-editor [data-gallery-background='checkerboard'] img {
+    padding: var(--pureknowledge-space-sm);
+    border-radius: var(--pureknowledge-radius-control);
+    background-color: #fff;
+    background-image:
+      linear-gradient(45deg, #d7d7d7 25%, transparent 25%),
+      linear-gradient(-45deg, #d7d7d7 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #d7d7d7 75%),
+      linear-gradient(-45deg, transparent 75%, #d7d7d7 75%);
+    background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+    background-size: 12px 12px;
+  }
 `
 
 const StyledWikiEmptyBody = styled.div`
@@ -1222,6 +1433,14 @@ const StyledWikiEmptyBody = styled.div`
   color: var(--pureknowledge-content-muted);
   font-size: var(--pureknowledge-font-size-body);
   line-height: var(--pureknowledge-line-height-content);
+`
+
+const StyledGalleryFileInput = styled.input`
+  position: fixed;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
 `
 
 const StyledEditPanel = styled.div`
@@ -2416,12 +2635,21 @@ function KnowledgePageEditor({
   const [linkPath, setLinkPath] = useState('')
   const [childTitle, setChildTitle] = useState('')
   const [editing, setEditing] = useState(false)
+  const [galleryError, setGalleryError] = useState('')
+  const [galleryRemoveCandidate, setGalleryRemoveCandidate] = useState<{
+    galleryIndex: number
+    imageIndex: number
+    alt: string
+  } | null>(null)
   const [expandedImage, setExpandedImage] = useState<{
     src: string
     alt: string
     path: string
   } | null>(null)
   const editorRef = useRef<DocumentEditorHandle>(null)
+  const galleryFileInputRef = useRef<HTMLInputElement>(null)
+  const galleryImportIndexRef = useRef<number | null>(null)
+  const galleryRemoveCancelRef = useRef<HTMLButtonElement>(null)
   const dropSurface = useRef<HTMLDivElement>(null)
   const [preparedBody, setPreparedBody] = useState<{
     pageId: string
@@ -2452,8 +2680,8 @@ function KnowledgePageEditor({
       if (editing && editor && position !== undefined) {
         editor.chain().focus().insertContentAt(position, drop.html).run()
         if (reference) editor.commands.insertContentAt(editor.state.doc.content.size, reference)
-        body = toMd(normalizeCollectionDocumentHtml(editor.getHTML(), packagePath))
-      } else body = [bodyDraft, toMd(normalizeCollectionDocumentHtml(drop.html, packagePath)), toMd(reference)].filter(Boolean).join('\n\n')
+        body = knowledgeHtmlToMarkdown(editor.getHTML(), packagePath)
+      } else body = [bodyDraft, knowledgeHtmlToMarkdown(drop.html, packagePath), toMd(reference)].filter(Boolean).join('\n\n')
       setBodyDraft(body)
       let next = updateKnowledgePage(store, page.id, { body }, { actor: HUMAN_ACTIVITY_ACTOR })
       if (!duplicate) next = addKnowledgeLink(next, page.id, drop.link, { actor: HUMAN_ACTIVITY_ACTOR })
@@ -2488,6 +2716,8 @@ function KnowledgePageEditor({
     setChildTitle('')
     setEditing(false)
     setExpandedImage(null)
+    setGalleryError('')
+    setGalleryRemoveCandidate(null)
   }, [page?.id])
 
   useEffect(() => {
@@ -2510,7 +2740,12 @@ function KnowledgePageEditor({
       : 'Write the page. Type /link to link another wiki page.',
   })
 
-  const editorExtensions = useMemo(() => [...baseExtensions.filter(extension => extension.name !== 'image'), CollectionImage], [baseExtensions])
+  const editorExtensions = useMemo(() => [
+    ...baseExtensions.filter(extension => extension.name !== 'image' && extension.name !== 'figure'),
+    CollectionImage,
+    KnowledgeFigure,
+    KnowledgeGallery,
+  ], [baseExtensions])
 
   useEffect(() => {
     if (!editing || !page || bodyDraft === page.body) return
@@ -2756,12 +2991,113 @@ function KnowledgePageEditor({
     return true
   }
 
+  const saveGalleryBody = (
+    body: string,
+    summary: string,
+    importedLinks: Array<{ title: string; path: string }> = [],
+  ): void => {
+    if (body === bodyDraft) return
+    setBodyDraft(body)
+    let next = updateKnowledgePage(store, page.id, { body }, { actor: HUMAN_ACTIVITY_ACTOR })
+    for (const link of importedLinks) {
+      if (!page.links.some(existing => existing.path === link.path)) {
+        next = addKnowledgeLink(next, page.id, { type: 'file', ...link }, { actor: HUMAN_ACTIVITY_ACTOR })
+      }
+    }
+    onSave(next)
+    recordUserOperation('page.update', summary)
+  }
+
+  const editableGalleryBody = (): string =>
+    /^\s*:::gallery\b/m.test(bodyDraft)
+      ? bodyDraft
+      : knowledgeHtmlToMarkdown(
+          upgradeLegacyKnowledgeGalleries(knowledgeMarkdownToHtml(bodyDraft)),
+          packagePath,
+        )
+
+  const parseGalleryTarget = (value: string | undefined): [number, number] | null => {
+    const match = /^(\d+):(\d+)$/.exec(value ?? '')
+    return match ? [Number(match[1]), Number(match[2])] : null
+  }
+
+  const handleGalleryFiles = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const input = event.currentTarget
+    const files = Array.from(input.files ?? [])
+    input.value = ''
+    const targetGallery = galleryImportIndexRef.current
+    galleryImportIndexRef.current = null
+    if (targetGallery === null || files.length === 0) return
+    setGalleryError('')
+    try {
+      for (const file of files) {
+        const supported = /^(image\/(?:png|jpeg|gif|webp|svg\+xml))$/i.test(file.type) || /\.(png|jpe?g|gif|webp|svg)$/i.test(file.name)
+        if (!supported) throw new Error(`“${file.name}” is not a supported image.`)
+        if (file.size > 24 * 1024 * 1024) throw new Error(`“${file.name}” exceeds the 24 MB image limit.`)
+      }
+      const imported = []
+      const importedLinks = []
+      for (const file of files) {
+        const alt = file.name.replace(/\.[^.]+$/, '')
+        const saved = await saveKnowledgeImage(packagePath, {
+          name: file.name,
+          alt,
+          bytes: new Uint8Array(await file.arrayBuffer()),
+          mimeType: file.type || (file.name.toLowerCase().endsWith('.svg') ? 'image/svg+xml' : 'image/png'),
+        })
+        imported.push({ alt, src: saved.relativePath })
+        importedLinks.push({ title: alt, path: saved.absolutePath })
+      }
+      saveGalleryBody(
+        appendKnowledgeGalleryImages(editableGalleryBody(), targetGallery, imported),
+        `Added ${imported.length} image${imported.length === 1 ? '' : 's'} to gallery on “${page.title}”`,
+        importedLinks,
+      )
+    } catch (error) {
+      setGalleryError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
   const handleRenderedWikiClick = (event: MouseEvent<HTMLDivElement>): void => {
+    const target = event.target
+    if (target instanceof Element) {
+      const add = target.closest<HTMLButtonElement>('button[data-gallery-add]')
+      if (add) {
+        event.preventDefault()
+        galleryImportIndexRef.current = Number(add.dataset.galleryAdd)
+        galleryFileInputRef.current?.click()
+        return
+      }
+      const remove = target.closest<HTMLButtonElement>('button[data-gallery-remove]')
+      const removeTarget = parseGalleryTarget(remove?.dataset.galleryRemove)
+      if (remove && removeTarget) {
+        event.preventDefault()
+        setGalleryRemoveCandidate({
+          galleryIndex: removeTarget[0],
+          imageIndex: removeTarget[1],
+          alt: remove.closest('figure')?.querySelector('img')?.getAttribute('alt') || 'this image',
+        })
+        return
+      }
+      const background = target.closest<HTMLButtonElement>('button[data-gallery-background]')
+      const backgroundTarget = parseGalleryTarget(background?.dataset.galleryBackground)
+      if (background && backgroundTarget) {
+        event.preventDefault()
+        const figure = background.closest<HTMLElement>('figure')
+        const current = (figure?.dataset.galleryBackground ?? 'transparent') as GalleryImageBackground
+        const backgrounds: GalleryImageBackground[] = ['transparent', 'light', 'dark', 'checkerboard']
+        const next = backgrounds[(backgrounds.indexOf(current) + 1) % backgrounds.length]
+        saveGalleryBody(
+          setKnowledgeGalleryImageBackground(editableGalleryBody(), backgroundTarget[0], backgroundTarget[1], next),
+          `Changed an image background on “${page.title}”`,
+        )
+        return
+      }
+    }
     if (openRenderedImage(event.target)) {
       event.preventDefault()
       return
     }
-    const target = event.target
     if (!(target instanceof Element)) return
     const wikiLink = target.closest<HTMLAnchorElement>('a[data-wiki-title]')
     if (wikiLink) {
@@ -2802,7 +3138,7 @@ function KnowledgePageEditor({
         onClick={handleRenderedWikiClick}
         onKeyDown={handleRenderedWikiKeyDown}
         dangerouslySetInnerHTML={{
-          __html: embedKnowledgeVideos(renderWikiLinkMarkdown(editorHtml)),
+          __html: addKnowledgeGalleryControls(embedKnowledgeVideos(renderWikiLinkMarkdown(editorHtml))),
         }}
       />
     )
@@ -2810,6 +3146,14 @@ function KnowledgePageEditor({
 
   return (
     <>
+      <StyledGalleryFileInput
+        ref={galleryFileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml,.svg"
+        multiple
+        aria-label="Add images to gallery"
+        onChange={event => void handleGalleryFiles(event)}
+      />
       <StyledEditorPane>
         <StyledEditorBody>
         <StyledMainEditor ref={dropSurface}>
@@ -2846,6 +3190,7 @@ function KnowledgePageEditor({
               )}
             </StyledWikiPageHeader>
             {dropError && <p role="alert">{dropError}</p>}
+            {galleryError && <p role="alert">{galleryError}</p>}
             {imageFailures.length ? (
               <StyledAssetLoadWarning role="alert">
                 <strong>
@@ -2886,7 +3231,7 @@ function KnowledgePageEditor({
                     slashCommands={wikiSlashCommands}
                     inputFormat="html"
                     outputFormat="html"
-                    onChange={html => setBodyDraft(toMd(normalizeCollectionDocumentHtml(html, packagePath)))}
+                    onChange={html => setBodyDraft(knowledgeHtmlToMarkdown(html, packagePath))}
                   />
                 </StyledKnowledgeEditorFrame>
               </StyledEditPanel>
@@ -3193,6 +3538,49 @@ function KnowledgePageEditor({
           </StyledImagePreview>
         ) : null}
       </Modal>
+      {galleryRemoveCandidate ? (
+        <>
+          <DeleteDialogStyle />
+          <Modal
+            open
+            onClose={() => setGalleryRemoveCandidate(null)}
+            title="Remove image from gallery?"
+            size="xs"
+            bodyClassName="knowledge-delete-body"
+            initialFocusRef={galleryRemoveCancelRef}
+          >
+            <p>
+              Remove <strong>“{galleryRemoveCandidate.alt}”</strong> from this gallery?
+            </p>
+            <p>The asset file will remain available in the knowledge package.</p>
+            <StyledChipRow style={{ justifyContent: 'flex-end', marginTop: 16 }}>
+              <Button
+                ref={galleryRemoveCancelRef}
+                variant="subtle"
+                onClick={() => setGalleryRemoveCandidate(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => {
+                  saveGalleryBody(
+                    removeKnowledgeGalleryImage(
+                      editableGalleryBody(),
+                      galleryRemoveCandidate.galleryIndex,
+                      galleryRemoveCandidate.imageIndex,
+                    ),
+                    `Removed an image from a gallery on “${page.title}”`,
+                  )
+                  setGalleryRemoveCandidate(null)
+                }}
+              >
+                Remove
+              </Button>
+            </StyledChipRow>
+          </Modal>
+        </>
+      ) : null}
     </>
   )
 

@@ -45,7 +45,16 @@ The app exposes 9 tools, including `getKnowledgeContext`, `searchKnowledge`, `re
 
 ## Files and data
 
-Pages contain Markdown, tags, aliases, wikilinks, inline package images, and resource links. Images dropped in the editor or imported by the agent are copied into the package's `assets/` directory and stored as portable relative Markdown. Agent imports support up to 100 images, 24 MB per image and approximately 72 MB per batch. In reading view, select an image to open a larger glass preview; keyboard users can focus it and press Enter or Space. If an inline package image cannot be read, the page identifies its failing `assets/…` path instead of hiding the failure. The knowledge store is available across the suite; agent changes record summaries and before/after content.
+Pages contain Markdown, tags, aliases, wikilinks, inline package images, and resource links. Images dropped in the editor or imported by the agent are copied into the package's `assets/` directory and stored as portable relative Markdown. Agent imports support up to 100 images, 24 MB per image and approximately 72 MB per batch. Compact galleries use an editor-safe block with one Markdown image per line:
+
+```markdown
+:::gallery size=96 columns=6
+![Tasks](assets/tasks.svg)
+![Pitch slide](assets/pitch-slide.png)
+:::
+```
+
+`size` is the thumbnail width and maximum height in pixels (48–320); `columns` is optional (1–12), and omitting it makes the grid responsive. The image alt text is also its editable caption. In reading view, gallery controls let users add multiple images, remove an image from the gallery, and cycle transparent thumbnails through transparent, light, dark, and checkerboard backgrounds. A background is stored portably as `{background=dark}` after that image's Markdown. Removing an image leaves its package asset intact in case another page uses it. This syntax survives reading and rich-editor round-trips. Existing raw-HTML figure grids are migrated to it when edited. Select any image to open a larger glass preview; keyboard users can focus it and press Enter or Space. If an inline package image cannot be read, the page identifies its failing `assets/…` path instead of hiding the failure. The knowledge store is available across the suite; agent changes record summaries and before/after content.
 
 ## Develop and customize
 

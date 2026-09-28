@@ -2,7 +2,7 @@ import { readPlatformFileBinary, writePlatformFileBinary } from '@purescience/pl
 import { updateCollectionAsset } from '@purescience/platform-ui/bridge/assets'
 import { uint8ArrayToBase64 } from '@purescience/platform-editor/insertCollectionImage.ts'
 import { buildPastedFigureRelativePath, normalizeCollectionImageMimeType } from '@purescience/platform-ui/bridge/collectionImagePaste'
-import type { readAssetTransfer } from '@purescience/platform-editor/assetTransfer.ts'
+import { readAssetTransfer } from '@purescience/platform-editor/assetTransfer.ts'
 
 const MAX_IMPORTED_IMAGE_BYTES = 24 * 1024 * 1024
 const MAX_BATCH_BASE64_CHARS = 96 * 1024 * 1024
@@ -98,7 +98,20 @@ export async function importKnowledgeImages(
 
 export async function saveKnowledgeImage(packagePath: string, image: ReturnType<typeof readAssetTransfer>) {
   if (!packagePath.endsWith('.knowledge')) throw new Error('Open a knowledge package before dropping images.')
-  const relativePath = buildPastedFigureRelativePath('assets', `${crypto.randomUUID()}-${image.name}`, image.mimeType)
+  const mimeType = normalizeCollectionImageMimeType(image.mimeType, image.name)
+  if (!mimeType) throw new Error('Supported images are PNG, JPEG, GIF, WebP, and SVG.')
+  if (image.bytes.byteLength > MAX_IMPORTED_IMAGE_BYTES) throw new Error('The image exceeds the 24 MB limit.')
+  if (mimeType === 'image/svg+xml') {
+    // Reuse the editor's active-content checks for images chosen from the UI.
+    readAssetTransfer(JSON.stringify({
+      version: 1,
+      name: image.name,
+      alt: image.alt,
+      caption: image.caption,
+      dataUrl: `data:${mimeType};base64,${uint8ArrayToBase64(image.bytes)}`,
+    }))
+  }
+  const relativePath = buildPastedFigureRelativePath('assets', `${crypto.randomUUID()}-${image.name}`, mimeType)
   const absolutePath = `${packagePath}/${relativePath}`
   const base64 = uint8ArrayToBase64(image.bytes)
   await writePlatformFileBinary(absolutePath,base64)

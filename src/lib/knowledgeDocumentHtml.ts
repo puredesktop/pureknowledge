@@ -1,10 +1,13 @@
-import { toHtml } from '@purescience/platform-editor'
 import {
   isDisplayableAbsoluteSource,
   prepareCollectionDocumentHtml,
   relativizeCollectionAssetPath,
   type ReadCollectionBinary,
 } from '@purescience/platform-ui/bridge/collectionDocumentHtml'
+import {
+  knowledgeMarkdownToHtml,
+  upgradeLegacyKnowledgeGalleries,
+} from './knowledgeGallery'
 
 export interface KnowledgeImageLoadFailure {
   path: string
@@ -91,7 +94,7 @@ export async function prepareKnowledgeDocumentHtml(
   }
 
   const html = await prepareCollectionDocumentHtml(
-    toHtml(markdown),
+    upgradeLegacyKnowledgeGalleries(knowledgeMarkdownToHtml(markdown)),
     packagePath,
     reportingReader,
   )
