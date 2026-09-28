@@ -79,6 +79,7 @@ import { createGlobalStyle, styled } from 'styled-components'
 import {
   catalogOpen,
   recordOperation,
+  savePlatformBinaryFileAs,
   type PlatformOperationInput,
 } from './bridge/platformBridge'
 import { KNOWLEDGE_APP_SLUG } from './constants'
@@ -3106,6 +3107,30 @@ function KnowledgePageEditor({
           imageIndex: removeTarget[1],
           alt: remove.closest('figure')?.querySelector('img')?.getAttribute('alt') || 'this image',
         })
+        return
+      }
+      const download = target.closest<HTMLButtonElement>('button[data-gallery-download]')
+      if (download) {
+        event.preventDefault()
+        const image = download.closest('figure')?.querySelector<HTMLImageElement>('img[src]')
+        if (!image) return
+        const relativePath = image.getAttribute('data-writer-asset-src')?.trim() || ''
+        const fileName = relativePath.split('/').pop() || `${image.alt || 'image'}.png`
+        setGalleryError('')
+        if (window.parent === window || !relativePath) {
+          const anchor = document.createElement('a')
+          anchor.href = image.currentSrc || image.src
+          anchor.download = fileName
+          anchor.click()
+          recordUserOperation('image.download', `Downloaded “${fileName}” from “${page.title}”`)
+        } else {
+          const sourcePath = `${packagePath.replace(/\/+$/, '')}/${relativePath.replace(/^\/+/, '')}`
+          void savePlatformBinaryFileAs(sourcePath, fileName)
+            .then(savedPath => {
+              if (savedPath) recordUserOperation('image.download', `Downloaded “${fileName}” from “${page.title}”`, { refs: { path: savedPath } })
+            })
+            .catch(error => setGalleryError(error instanceof Error ? error.message : String(error)))
+        }
         return
       }
       const background = target.closest<HTMLButtonElement>('button[data-gallery-background]')

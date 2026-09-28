@@ -1,6 +1,10 @@
 import { bridge } from '@purescience/platform-ui/bridge/client'
 import { getPlatformPreferences } from '@purescience/platform-ui/bridge/preferences'
 import { PLATFORM_BRIDGE_METHODS } from '@purescience/platform-ui/bridge/methods'
+import {
+  readPlatformFileBinary,
+  writePlatformFileBinary,
+} from '@purescience/platform-ui/bridge/fs'
 import { KNOWLEDGE_APP_SLUG } from '../constants'
 import type {
   KnowledgeAppSettings,
@@ -43,6 +47,31 @@ export async function writeTextFile(
   content: string,
 ): Promise<void> {
   await bridge.call(PLATFORM_BRIDGE_METHODS.FS_WRITE, [path, content])
+}
+
+/** Copy an existing binary file to a user-chosen location. */
+export async function savePlatformBinaryFileAs(
+  sourcePath: string,
+  defaultName: string,
+): Promise<string | null> {
+  const extension = defaultName.includes('.')
+    ? defaultName.split('.').pop()?.toLowerCase()
+    : undefined
+  const result = await bridge.call<{ path?: string | null }>(
+    PLATFORM_BRIDGE_METHODS.DIALOG_SAVE_FILE,
+    [{
+      defaultName,
+      ...(extension
+        ? { filters: [{ name: `${extension.toUpperCase()} image`, extensions: [extension] }] }
+        : {}),
+    }],
+  )
+  const destination = result?.path?.trim()
+  if (!destination) return null
+  const binary = await readPlatformFileBinary(sourcePath, 24 * 1024 * 1024)
+  if (binary.truncated) throw new Error('The image exceeds the 24 MB download limit.')
+  await writePlatformFileBinary(destination, binary.base64)
+  return destination
 }
 
 export interface CatalogOpenRequest {

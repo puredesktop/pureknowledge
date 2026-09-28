@@ -95,6 +95,7 @@ describe('knowledge galleries', () => {
     const controlled = addKnowledgeGalleryControls(knowledgeMarkdownToHtml(markdown))
     expect(controlled).toContain('data-gallery-add="0"')
     expect(controlled).toContain('data-gallery-background="0:0"')
+    expect(controlled).toContain('data-gallery-download="0:0"')
     expect(controlled).toContain('data-gallery-remove="0:1"')
     expect(controlled).toContain('<svg')
     expect(controlled).not.toContain('>Background:')

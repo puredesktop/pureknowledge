@@ -238,6 +238,7 @@ export function addKnowledgeGalleryControls(html: string): string {
       controls.className = 'knowledge-gallery-image-controls'
       controls.innerHTML = [
         `<button type="button" data-gallery-background="${galleryIndex}:${imageIndex}" data-background-value="${background}" title="Change background · ${backgroundLabel}" aria-label="Change ${escapeHtml(figure.querySelector('img')?.getAttribute('alt') || 'image')} background; currently ${backgroundLabel}"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3a9 9 0 0 1 0 18Z"></path></svg></button>`,
+        `<button type="button" data-gallery-download="${galleryIndex}:${imageIndex}" title="Download image" aria-label="Download ${escapeHtml(figure.querySelector('img')?.getAttribute('alt') || 'image')}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"></path></svg></button>`,
         `<button type="button" class="knowledge-gallery-remove" data-gallery-remove="${galleryIndex}:${imageIndex}" title="Remove from gallery" aria-label="Remove ${escapeHtml(figure.querySelector('img')?.getAttribute('alt') || 'image')} from gallery"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"></path></svg></button>`,
       ].join('')
       figure.append(controls)
