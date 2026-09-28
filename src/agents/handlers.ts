@@ -5,6 +5,10 @@ import {
 } from '@purescience/platform-ui/bridge/agentToolHelpers'
 import type { AgentToolHandlerResult } from '@purescience/platform-ui/bridge/react/usePlatformAgentTools'
 import { recordOperation } from '../bridge/platformBridge'
+import {
+  importKnowledgeImages,
+  type KnowledgeImageImport,
+} from '../bridge/knowledgeAssets'
 import { KNOWLEDGE_APP_SLUG } from '../constants'
 import {
   applyKnowledgeAgentChange,
@@ -79,6 +83,39 @@ function readLinksArg(
     if (Object.keys(link).length) links.push(link)
   }
   return links
+}
+
+function readImportAssetsArg(
+  args: Record<string, unknown>,
+): KnowledgeImageImport[] | { error: string } | undefined {
+  const raw = args.importAssets
+  if (raw === undefined) return undefined
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return { error: '"importAssets" must be a non-empty array of local images.' }
+  }
+  if (raw.length > 100) {
+    return { error: 'Import at most 100 images in one call.' }
+  }
+  const images: KnowledgeImageImport[] = []
+  for (const [index, item] of raw.entries()) {
+    if (!item || typeof item !== 'object') {
+      return { error: `importAssets[${index}] must be an object.` }
+    }
+    const candidate = item as Record<string, unknown>
+    const sourcePath =
+      typeof candidate.sourcePath === 'string'
+        ? candidate.sourcePath.trim()
+        : ''
+    if (!sourcePath.startsWith('/')) {
+      return {
+        error: `importAssets[${index}].sourcePath must be an absolute local path.`,
+      }
+    }
+    const alt =
+      typeof candidate.alt === 'string' ? candidate.alt.trim() : undefined
+    images.push({ sourcePath, ...(alt ? { alt } : {}) })
+  }
+  return images
 }
 
 /**
@@ -364,8 +401,18 @@ export async function applyKnowledgeChangeHandler(
   }
 
   const body = readAgentToolStringArg(args, 'body')
-  if ((action === 'create' || action === 'update') && !body?.trim()) {
-    return agentToolErrorContent('Pass "body": the page content (markdown).')
+  const importAssets = readImportAssetsArg(args)
+  if (importAssets && 'error' in importAssets) {
+    return agentToolErrorContent(importAssets.error)
+  }
+  if (
+    (action === 'create' || action === 'update') &&
+    !body?.trim() &&
+    !importAssets?.length
+  ) {
+    return agentToolErrorContent(
+      'Pass "body": the page content (markdown), or "importAssets": local images to append.',
+    )
   }
 
   const titleArg = readAgentToolStringArg(args, 'title')?.trim()
@@ -430,6 +477,36 @@ export async function applyKnowledgeChangeHandler(
     .map(tag => tag.trim())
     .filter(Boolean)
   const links = readLinksArg(args)
+  if (importAssets?.length && action !== 'create' && action !== 'update') {
+    return agentToolErrorContent(
+      '"importAssets" is supported with action "create" or "update".',
+    )
+  }
+  let importedAssets: Awaited<ReturnType<typeof importKnowledgeImages>> = []
+  if (importAssets?.length) {
+    try {
+      importedAssets = await importKnowledgeImages(context.storePath, importAssets)
+    } catch (error) {
+      return agentToolErrorContent(
+        error instanceof Error ? error.message : String(error),
+      )
+    }
+  }
+  const importedMarkdown = importedAssets
+    .map(asset => asset.markdown)
+    .join('\n\n')
+  const baseBody = body?.trim() ?? (action === 'update' ? existing?.body : '')
+  const effectiveBody = [baseBody, importedMarkdown]
+    .filter(Boolean)
+    .join('\n\n')
+  const effectiveLinks: Partial<KnowledgeLink>[] = [
+    ...(links ?? []),
+    ...importedAssets.map(asset => ({
+      type: 'file' as const,
+      title: asset.alt,
+      path: asset.absolutePath,
+    })),
+  ]
   const changeType: KnowledgeAgentChangeType =
     action === 'create' ? 'page.create' : (`page.${action}` as const)
   const spaceId =
@@ -449,7 +526,7 @@ export async function applyKnowledgeChangeHandler(
       ? ''
       : action === 'rename' || action === 'promote'
         ? existing?.body
-        : body ?? undefined
+        : effectiveBody || undefined
 
   const next = applyKnowledgeAgentChange(store, {
     spaceId: parent?.spaceId ?? spaceId,
@@ -462,11 +539,11 @@ export async function applyKnowledgeChangeHandler(
     ...(after !== undefined ? { after } : {}),
     patch: {
       title,
-      ...(body?.trim() ? { body } : {}),
+      ...(effectiveBody ? { body: effectiveBody } : {}),
       ...(tags?.length ? { tags } : {}),
       ...(parent ? { parentId: parent.id } : {}),
       ...(kindArg ? { kind: kindArg as 'wiki' | 'note' } : {}),
-      ...(links?.length ? { links } : {}),
+      ...(effectiveLinks.length ? { links: effectiveLinks } : {}),
       ...(mergeInto ? { mergeIntoPageId: mergeInto.id } : {}),
     },
   })
@@ -486,6 +563,16 @@ export async function applyKnowledgeChangeHandler(
       status: 'applied',
       storePath: context.storePath,
       artifactPaths: [context.storePath],
+      ...(importedAssets.length
+        ? {
+            importedAssets: importedAssets.map(asset => ({
+              sourcePath: asset.sourcePath,
+              path: asset.absolutePath,
+              relativePath: asset.relativePath,
+              markdown: asset.markdown,
+            })),
+          }
+        : {}),
       note: 'Written to the wiki and recorded in the agent log with before/after.',
     }),
   }

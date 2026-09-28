@@ -3,8 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../bridge/platformBridge', () => ({
   recordOperation: vi.fn(async () => null),
 }))
+vi.mock('../bridge/knowledgeAssets', () => ({
+  importKnowledgeImages: vi.fn(async () => []),
+}))
 
 import { recordOperation } from '../bridge/platformBridge'
+import { importKnowledgeImages } from '../bridge/knowledgeAssets'
 import {
   applyKnowledgeChangeHandler,
   getKnowledgeContextHandler,
@@ -60,6 +64,7 @@ describe('getKnowledgeContext', () => {
 describe('applyKnowledgeChange ledger wiring', () => {
   beforeEach(() => {
     vi.mocked(recordOperation).mockClear()
+    vi.mocked(importKnowledgeImages).mockClear()
   })
 
   it('records an agent-lane operation after a successful write', async () => {
@@ -91,6 +96,110 @@ describe('applyKnowledgeChange ledger wiring', () => {
     })
     expect(result.content).toContain('already exists')
     expect(recordOperation).not.toHaveBeenCalled()
+  })
+
+  it('bulk-imports images, appends inline markdown, and attaches copied files', async () => {
+    let saved = createDefaultKnowledgeStore()
+    const context = {
+      ...contextFor(saved),
+      saveStore: async (next: typeof saved) => {
+        saved = next
+      },
+    }
+    vi.mocked(importKnowledgeImages).mockResolvedValueOnce([
+      {
+        sourcePath: '/Brand/logo.svg',
+        relativePath: 'assets/logo-1.svg',
+        absolutePath: '/Users/developer/PureScience/knowledge.knowledge/assets/logo-1.svg',
+        alt: 'Pure logo',
+        markdown: '![Pure logo](assets/logo-1.svg)',
+      },
+      {
+        sourcePath: '/Brand/slide.png',
+        relativePath: 'assets/slide-2.png',
+        absolutePath: '/Users/developer/PureScience/knowledge.knowledge/assets/slide-2.png',
+        alt: 'Pitch slide',
+        markdown: '![Pitch slide](assets/slide-2.png)',
+      },
+    ])
+
+    const result = await applyKnowledgeChangeHandler(context, {
+      action: 'create',
+      title: 'Brand gallery',
+      body: 'Approved brand images.',
+      summary: 'Create the brand gallery.',
+      importAssets: [
+        { sourcePath: '/Brand/logo.svg', alt: 'Pure logo' },
+        { sourcePath: '/Brand/slide.png', alt: 'Pitch slide' },
+      ],
+    })
+
+    expect(importKnowledgeImages).toHaveBeenCalledWith(
+      context.storePath,
+      expect.arrayContaining([{ sourcePath: '/Brand/logo.svg', alt: 'Pure logo' }]),
+    )
+    const page = saved.pages.find(candidate => candidate.title === 'Brand gallery')
+    expect(page?.body).toContain('![Pure logo](assets/logo-1.svg)')
+    expect(page?.body).toContain('![Pitch slide](assets/slide-2.png)')
+    expect(page?.links).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'file', title: 'Pure logo', path: expect.stringContaining('/assets/logo-1.svg') }),
+        expect.objectContaining({ type: 'file', title: 'Pitch slide', path: expect.stringContaining('/assets/slide-2.png') }),
+      ]),
+    )
+    const output = JSON.parse(result.content) as { importedAssets: unknown[] }
+    expect(output.importedAssets).toHaveLength(2)
+  })
+
+  it('rejects relative import paths before writing', async () => {
+    const store = createDefaultKnowledgeStore()
+    const result = await applyKnowledgeChangeHandler(contextFor(store), {
+      action: 'create',
+      title: 'Brand gallery',
+      body: 'Images.',
+      summary: 'Create the brand gallery.',
+      importAssets: [{ sourcePath: 'Brand/logo.svg' }],
+    })
+    expect(result.content).toContain('absolute local path')
+    expect(importKnowledgeImages).not.toHaveBeenCalled()
+  })
+
+  it('appends an asset-only update to the existing body', async () => {
+    let saved = createDefaultKnowledgeStore()
+    saved = createKnowledgePage(saved, {
+      spaceId: saved.activeSpaceId,
+      parentId: saved.spaces[0]!.rootPageId,
+      kind: 'wiki',
+      title: 'Brand guide',
+      body: 'Keep this introduction.',
+    })
+    const context = {
+      ...contextFor(saved),
+      saveStore: async (next: typeof saved) => {
+        saved = next
+      },
+    }
+    vi.mocked(importKnowledgeImages).mockResolvedValueOnce([
+      {
+        sourcePath: '/Brand/logo.svg',
+        relativePath: 'assets/logo.svg',
+        absolutePath: `${context.storePath}/assets/logo.svg`,
+        alt: 'Pure logo',
+        markdown: '![Pure logo](assets/logo.svg)',
+      },
+    ])
+
+    await applyKnowledgeChangeHandler(context, {
+      action: 'update',
+      page: 'Brand guide',
+      summary: 'Add the approved logo.',
+      importAssets: [{ sourcePath: '/Brand/logo.svg', alt: 'Pure logo' }],
+    })
+
+    const page = saved.pages.find(candidate => candidate.title === 'Brand guide')
+    expect(page?.body).toBe(
+      'Keep this introduction.\n\n![Pure logo](assets/logo.svg)',
+    )
   })
 })
 

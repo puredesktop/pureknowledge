@@ -72,7 +72,11 @@ determine where this belongs" is a failure.
    content), or `delete`. Markdown body, `[[Page name]]` wikilinks,
    tags as a comma-separated list, `links` for the files, app
    resources, or URLs the page concerns, and always the one-line
-   summary.
+   summary. To show local images inline, pass up to 100 absolute image
+   paths in `importAssets`; the tool copies them into the package,
+   appends portable `assets/…` Markdown to the body, records file links,
+   and returns every generated path and Markdown fragment. An asset-only
+   update can omit `body`; its images append to the existing page.
 5. **Report what was written**: the page, the change, and the summary —
    the same line the user will see in the agent log.
 

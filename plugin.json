@@ -143,7 +143,7 @@
         {
           "name": "applyKnowledgeChange",
           "risk": "destructive",
-          "description": "Write a change to the wiki directly: create a page, update, rename, promote a note to wiki, merge into another page, or delete. Body is markdown; [[Page name]] creates wikilinks. Every write is recorded in the agent log with before/after and in the suite operations ledger. Call getKnowledgeContext first to ground the space and page.",
+          "description": "Write a change to the wiki directly: create a page, update, rename, promote a note to wiki, merge into another page, or delete. Body is markdown; [[Page name]] creates wikilinks. importAssets copies up to 100 local images into the package and appends portable inline Markdown. Every write is recorded in the agent log with before/after and in the suite operations ledger. Call getKnowledgeContext first to ground the space and page.",
           "requiresApproval": true,
           "inputSchema": {
             "type": "object",
@@ -155,7 +155,8 @@
                 "type": "string"
               },
               "body": {
-                "type": "string"
+                "type": "string",
+                "description": "Page Markdown. Required for create/update unless importAssets supplies the new content; an asset-only update appends to the existing body."
               },
               "summary": {
                 "type": "string"
@@ -227,10 +228,30 @@
                     "title"
                   ]
                 }
+              },
+              "importAssets": {
+                "type": "array",
+                "maxItems": 100,
+                "description": "Local images to copy into the knowledge package and append inline to body. Each copied image is also recorded as a file link. Supported: PNG, JPEG, GIF, WebP, SVG.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "sourcePath": {
+                      "type": "string",
+                      "description": "Absolute path to a local image outside or inside the package."
+                    },
+                    "alt": {
+                      "type": "string",
+                      "description": "Accessible image description; defaults to the source filename."
+                    }
+                  },
+                  "required": [
+                    "sourcePath"
+                  ]
+                }
               }
             },
             "required": [
-              "body",
               "summary"
             ]
           }
