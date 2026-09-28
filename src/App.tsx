@@ -374,7 +374,9 @@ const StyledPageList = styled.div`
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 0 0 var(--pureknowledge-space-xl);
+  /* Let the final page and its actions scroll above the floating desktop dock. */
+  padding: 0 0 max(96px, env(safe-area-inset-bottom, 0px));
+  scroll-padding-bottom: 96px;
 `
 
 const StyledTreeLabel = styled(SidebarSectionLabel)``
