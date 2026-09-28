@@ -41,7 +41,7 @@ export interface KnowledgeIndexFile {
 
 type PageMeta = Omit<KnowledgePage, 'body'>
 
-/** Stable at creation: readable slug prefix, unique id suffix, never renamed. */
+/** Readable slug prefix and unique id suffix; slug changes move the file. */
 export function pageFileName(page: KnowledgePage): string {
   const slug = (page.slug || 'page')
     .toLowerCase()
@@ -110,12 +110,31 @@ export function assembleKnowledgeStore(
   return {
     schemaVersion: 1,
     spaces: index.spaces,
-    pages,
+    // Older writers left the previous filename behind after a rename. These
+    // files share an identity: choose the newest content, independent of listing
+    // order, while leaving historical files on disk available for recovery.
+    pages: latestKnowledgePages(pages),
     activity,
     agentChanges: proposals,
     activeSpaceId: index.activeSpaceId ?? '',
     activePageId: index.activePageId,
   }
+}
+
+export function latestKnowledgePages(pages: KnowledgePage[]): KnowledgePage[] {
+  const byId = new Map<string, KnowledgePage>()
+  const timestamp = (page: KnowledgePage): number => {
+    const parsed = Date.parse(page.updatedAt)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  for (const page of pages) {
+    const current = byId.get(page.id)
+    if (!current || timestamp(page) > timestamp(current) ||
+      (timestamp(page) === timestamp(current) && serializePageFile(page) > serializePageFile(current))) {
+      byId.set(page.id, page)
+    }
+  }
+  return [...byId.values()]
 }
 
 export interface KnowledgePageWritePlan {
@@ -140,7 +159,7 @@ export function planKnowledgeWrites(
   const prevById = new Map(
     (previous?.pages ?? []).map(page => [page.id, page]),
   )
-  const nextIds = new Set(next.pages.map(page => page.id))
+  const nextById = new Map(next.pages.map(page => [page.id, page]))
   const writes: Array<{ fileName: string; content: string }> = []
   for (const page of next.pages) {
     const before = prevById.get(page.id)
@@ -153,7 +172,10 @@ export function planKnowledgeWrites(
   }
   const deletes: string[] = []
   for (const [id, page] of prevById) {
-    if (!nextIds.has(id)) deletes.push(pageFileName(page))
+    const replacement = nextById.get(id)
+    if (!replacement || pageFileName(replacement) !== pageFileName(page)) {
+      deletes.push(pageFileName(page))
+    }
   }
   return {
     writes,

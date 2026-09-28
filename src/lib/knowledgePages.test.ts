@@ -80,3 +80,23 @@ describe('knowledge page files', () => {
     expect(assembled.activeSpaceId).toBe(store.activeSpaceId)
   })
 })
+
+it('removes the previous filename after a renamed page is written', () => {
+  const before = createDefaultKnowledgeStore()
+  const page = before.pages[0]!
+  const after = { ...before, pages: [{ ...page, title: 'Renamed', slug: 'renamed' }] }
+  const plan = planKnowledgeWrites(before, after)
+  expect(plan.writes.map(write => write.fileName)).toEqual([pageFileName(after.pages[0]!)])
+  expect(plan.deletes).toEqual([pageFileName(page)])
+})
+it('loads the newest version of a duplicate identity regardless of directory order', () => {
+  const store = createDefaultKnowledgeStore()
+  const older = { ...store.pages[0]!, title: 'Old title', updatedAt: '2026-01-01T00:00:00Z', body: 'old' }
+  const newer = { ...older, title: 'New title', updatedAt: '2026-01-02T00:00:00Z', body: 'new' }
+  const other = { ...newer, id: 'different-page' }
+  for (const pages of [[older, newer, other], [newer, older, other]]) {
+    const result = assembleKnowledgeStore(JSON.parse(serializeKnowledgeIndex(store)), pages, [], [])
+    expect(result.pages).toHaveLength(2)
+    expect(result.pages.find(page => page.id === older.id)).toEqual(newer)
+  }
+})

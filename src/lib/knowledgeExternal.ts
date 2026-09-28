@@ -1,4 +1,5 @@
 /** Merge content written by another app instance into the local state. */
+import { latestKnowledgePages } from './knowledgePages'
 import type { KnowledgeStore } from './knowledgeTypes'
 
 /** Does a changed path belong to this package? */
@@ -49,6 +50,8 @@ export function mergeExternalKnowledgeStore(
   local: KnowledgeStore,
   incoming: KnowledgeStore,
 ): KnowledgeExternalMergeResult {
+  local = { ...local, pages: latestKnowledgePages(local.pages) }
+  incoming = { ...incoming, pages: latestKnowledgePages(incoming.pages) }
   const conflicts: string[] = []
   const localPagesById = new Map(local.pages.map(page => [page.id, page]))
   const incomingIds = new Set(incoming.pages.map(page => page.id))
