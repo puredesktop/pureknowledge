@@ -1,6 +1,9 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { prepareKnowledgeDocumentHtml } from './knowledgeDocumentHtml'
+import {
+  prepareKnowledgeDocumentHtml,
+  readKnowledgeImagePreview,
+} from './knowledgeDocumentHtml'
 
 describe('prepareKnowledgeDocumentHtml', () => {
   afterEach(() => {
@@ -36,7 +39,18 @@ describe('prepareKnowledgeDocumentHtml', () => {
     expect(result.html).toContain('data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=')
     expect(result.html).toContain('data:image/png;base64,iVBORw==')
     expect(result.html).toContain('data-writer-asset-src="assets/tile.svg"')
+    expect(result.html).toContain('data-knowledge-image-preview=""')
+    expect(result.html).toContain('aria-label="Open App tile larger"')
+    expect(result.html).toContain('tabindex="0"')
     expect(result.imageFailures).toEqual([])
+
+    const container = document.createElement('div')
+    container.innerHTML = result.html
+    expect(readKnowledgeImagePreview(container.querySelector('img'))).toEqual({
+      src: 'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=',
+      alt: 'App tile',
+      path: 'assets/tile.svg',
+    })
   })
 
   it('reports a failed asset by its package-relative path without hiding the page', async () => {
@@ -67,5 +81,12 @@ describe('prepareKnowledgeDocumentHtml', () => {
     expect(warning).toHaveBeenCalledWith(
       '[PureKnowledge] Could not load inline image "assets/missing.svg": File not found',
     )
+    const container = document.createElement('div')
+    container.innerHTML = result.html
+    expect(
+      container
+        .querySelector('img[src="assets/missing.svg"]')
+        ?.hasAttribute('data-knowledge-image-preview'),
+    ).toBe(false)
   })
 })

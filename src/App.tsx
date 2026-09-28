@@ -2,7 +2,10 @@ import { MenuButtonDropdown } from '@purescience/platform-ui/components/common/d
 import { CollectionImage } from '@purescience/platform-editor/extensions/collectionImage.ts'
 import { useKnowledgeDrop } from './hooks/useKnowledgeDrop'
 import { embedKnowledgeVideos } from './lib/knowledgeDrop'
-import { prepareKnowledgeDocumentHtml } from './lib/knowledgeDocumentHtml'
+import {
+  prepareKnowledgeDocumentHtml,
+  readKnowledgeImagePreview,
+} from './lib/knowledgeDocumentHtml'
 import { normalizeCollectionDocumentHtml } from '@purescience/platform-ui/bridge/collectionDocumentHtml'
 import { readPlatformFileBinary } from '@purescience/platform-ui/bridge/fs'
 import { toMd, type DocumentEditorHandle } from '@purescience/platform-editor'
@@ -54,6 +57,7 @@ import {
   useMemo,
   useState,
   type FormEvent,
+  type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
 } from 'react'
@@ -1047,6 +1051,39 @@ const StyledAssetLoadWarning = styled.div`
   }
 `
 
+const StyledImagePreview = styled.figure`
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  padding: 18px;
+  box-sizing: border-box;
+
+  img {
+    display: block;
+    max-width: 100%;
+    max-height: calc(100vh - 190px);
+    object-fit: contain;
+    border-radius: 10px;
+    box-shadow: 0 18px 60px rgb(0 0 0 / 0.24);
+  }
+
+  figcaption {
+    max-width: min(78ch, 100%);
+    color: var(--platform-colors-text-secondary);
+    font-family: var(--platform-typography-font-family);
+    font-size: 12px;
+    line-height: 1.45;
+    text-align: center;
+    overflow-wrap: anywhere;
+  }
+`
+
 // A wiki page is read: the platform reading surface (serif 16/1.7, 72ch).
 const StyledWikiBody = styled(ReadingSurface)`
   img {
@@ -1054,6 +1091,15 @@ const StyledWikiBody = styled(ReadingSurface)`
     max-width: 100%;
     height: auto;
     margin: 0 0 var(--pureknowledge-space-lg);
+  }
+
+  img[data-knowledge-image-preview] {
+    cursor: zoom-in;
+  }
+
+  img[data-knowledge-image-preview]:focus-visible {
+    outline: 2px solid var(--platform-colors-focus);
+    outline-offset: 3px;
   }
 
   a[data-wiki-title] {
@@ -2370,6 +2416,11 @@ function KnowledgePageEditor({
   const [linkPath, setLinkPath] = useState('')
   const [childTitle, setChildTitle] = useState('')
   const [editing, setEditing] = useState(false)
+  const [expandedImage, setExpandedImage] = useState<{
+    src: string
+    alt: string
+    path: string
+  } | null>(null)
   const editorRef = useRef<DocumentEditorHandle>(null)
   const dropSurface = useRef<HTMLDivElement>(null)
   const [preparedBody, setPreparedBody] = useState<{
@@ -2436,6 +2487,7 @@ function KnowledgePageEditor({
     setLinkPath('')
     setChildTitle('')
     setEditing(false)
+    setExpandedImage(null)
   }, [page?.id])
 
   useEffect(() => {
@@ -2697,7 +2749,18 @@ function KnowledgePageEditor({
       },
     )
 
+  const openRenderedImage = (target: EventTarget | null): boolean => {
+    const preview = readKnowledgeImagePreview(target)
+    if (!preview) return false
+    setExpandedImage(preview)
+    return true
+  }
+
   const handleRenderedWikiClick = (event: MouseEvent<HTMLDivElement>): void => {
+    if (openRenderedImage(event.target)) {
+      event.preventDefault()
+      return
+    }
     const target = event.target
     if (!(target instanceof Element)) return
     const wikiLink = target.closest<HTMLAnchorElement>('a[data-wiki-title]')
@@ -2718,6 +2781,13 @@ function KnowledgePageEditor({
     }
   }
 
+  const handleRenderedWikiKeyDown = (
+    event: KeyboardEvent<HTMLDivElement>,
+  ): void => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    if (openRenderedImage(event.target)) event.preventDefault()
+  }
+
   const renderWikiText = (text: string): ReactNode => {
     if (!text.trim()) {
       return (
@@ -2730,6 +2800,7 @@ function KnowledgePageEditor({
     return (
       <StyledWikiBody
         onClick={handleRenderedWikiClick}
+        onKeyDown={handleRenderedWikiKeyDown}
         dangerouslySetInnerHTML={{
           __html: embedKnowledgeVideos(renderWikiLinkMarkdown(editorHtml)),
         }}
@@ -2738,8 +2809,9 @@ function KnowledgePageEditor({
   }
 
   return (
-    <StyledEditorPane>
-      <StyledEditorBody>
+    <>
+      <StyledEditorPane>
+        <StyledEditorBody>
         <StyledMainEditor ref={dropSurface}>
           <StyledWikiSurface>
             <StyledWikiPageHeader>
@@ -3102,8 +3174,26 @@ function KnowledgePageEditor({
           </StyledWikiSurface>
         </StyledMainEditor>
 
-      </StyledEditorBody>
-    </StyledEditorPane>
+        </StyledEditorBody>
+      </StyledEditorPane>
+      <Modal
+        open={Boolean(expandedImage)}
+        onClose={() => setExpandedImage(null)}
+        title={expandedImage?.alt || 'Image preview'}
+        size="xl"
+        closeOnEscape
+        closeOnBackdropClick
+      >
+        {expandedImage ? (
+          <StyledImagePreview>
+            <img src={expandedImage.src} alt={expandedImage.alt} />
+            {expandedImage.path ? (
+              <figcaption>{expandedImage.path}</figcaption>
+            ) : null}
+          </StyledImagePreview>
+        ) : null}
+      </Modal>
+    </>
   )
 
   function selectPageRoot(): void {

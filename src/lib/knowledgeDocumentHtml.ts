@@ -1,5 +1,6 @@
 import { toHtml } from '@purescience/platform-editor'
 import {
+  isDisplayableAbsoluteSource,
   prepareCollectionDocumentHtml,
   relativizeCollectionAssetPath,
   type ReadCollectionBinary,
@@ -13,6 +14,52 @@ export interface KnowledgeImageLoadFailure {
 export interface PreparedKnowledgeDocument {
   html: string
   imageFailures: KnowledgeImageLoadFailure[]
+}
+
+export interface KnowledgeImagePreview {
+  src: string
+  alt: string
+  path: string
+}
+
+function makeImagesPreviewable(html: string): string {
+  if (!html.trim()) return html
+  const document = new DOMParser().parseFromString(html, 'text/html')
+  let changed = false
+  for (const image of Array.from(document.querySelectorAll('img[src]'))) {
+    const src = image.getAttribute('src')?.trim() ?? ''
+    if (!isDisplayableAbsoluteSource(src)) continue
+    const alt = image.getAttribute('alt')?.trim()
+    image.setAttribute('data-knowledge-image-preview', '')
+    image.setAttribute('role', 'button')
+    image.setAttribute('tabindex', '0')
+    image.setAttribute(
+      'aria-label',
+      alt ? `Open ${alt} larger` : 'Open image larger',
+    )
+    changed = true
+  }
+  return changed ? document.body.innerHTML : html
+}
+
+export function readKnowledgeImagePreview(
+  target: EventTarget | null,
+): KnowledgeImagePreview | null {
+  if (!(target instanceof Element)) return null
+  const image = target.closest<HTMLImageElement>(
+    'img[data-knowledge-image-preview]',
+  )
+  if (!image) return null
+  const src = image.currentSrc || image.getAttribute('src') || ''
+  if (!src) return null
+  return {
+    src,
+    alt: image.getAttribute('alt')?.trim() || 'Inline image',
+    path:
+      image.getAttribute('data-writer-asset-src')?.trim() ||
+      image.getAttribute('src')?.trim() ||
+      '',
+  }
 }
 
 /**
@@ -48,5 +95,8 @@ export async function prepareKnowledgeDocumentHtml(
     packagePath,
     reportingReader,
   )
-  return { html, imageFailures: [...failures.values()] }
+  return {
+    html: makeImagesPreviewable(html),
+    imageFailures: [...failures.values()],
+  }
 }
