@@ -1189,9 +1189,24 @@ const StyledWikiBody = styled(ReadingSurface)`
   }
 
   .knowledge-gallery-image-controls {
+    position: absolute;
+    z-index: 1;
+    top: 4px;
+    right: 4px;
     display: flex;
     gap: 4px;
     max-width: 100%;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-2px);
+    transition: opacity 120ms ease, transform 120ms ease;
+  }
+
+  [data-knowledge-gallery] figure:hover .knowledge-gallery-image-controls,
+  [data-knowledge-gallery] figure:focus-within .knowledge-gallery-image-controls {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
   }
 
   .knowledge-gallery-image-controls button {
@@ -1228,6 +1243,20 @@ const StyledWikiBody = styled(ReadingSurface)`
   .knowledge-gallery-image-controls button:hover {
     background: var(--pureknowledge-content-subtle);
     color: var(--pureknowledge-content-text);
+  }
+
+  @media (hover: none), (pointer: coarse) {
+    .knowledge-gallery-image-controls {
+      opacity: 1;
+      pointer-events: auto;
+      transform: none;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .knowledge-gallery-image-controls {
+      transition: none;
+    }
   }
 
   img {
