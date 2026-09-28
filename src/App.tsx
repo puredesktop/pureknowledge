@@ -51,6 +51,7 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  ListCollapse,
   Pencil,
   StickyNote,
   Trash2,
@@ -397,7 +398,49 @@ const StyledPageList = styled.div`
   scroll-padding-bottom: 96px;
 `
 
-const StyledTreeLabel = styled(SidebarSectionLabel)``
+const StyledTreeHeading = styled.div`
+  display: flex;
+  align-items: center;
+  padding-right: var(--pureknowledge-space-md);
+`
+
+const StyledTreeLabel = styled(SidebarSectionLabel)`
+  flex: 1 1 auto;
+`
+
+const StyledCollapseTreeButton = styled.button`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--pureknowledge-radius-control);
+  background: transparent;
+  color: var(--pureknowledge-muted);
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--pureknowledge-panel-hover);
+    color: var(--pureknowledge-text);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--pureknowledge-focus);
+    outline-offset: 1px;
+  }
+
+  &:disabled {
+    cursor: default;
+    opacity: 0.35;
+  }
+
+  svg {
+    width: 15px;
+    height: 15px;
+  }
+`
 
 const StyledTreeItem = styled.div`
   margin-bottom: 0;
@@ -1703,7 +1746,7 @@ function TrashIcon(): React.ReactElement {
 function buildWikiRows(
   pages: KnowledgePage[],
   rootPageId: string | null,
-  collapsedPageIds: Set<string>,
+  expandedPageIds: Set<string>,
 ): Array<{
   page: KnowledgePage
   depth: number
@@ -1749,7 +1792,7 @@ function buildWikiRows(
   ): void => {
     if (seen.has(page.id)) return
     const children = sortPages(childrenByParent.get(page.id) ?? [])
-    const expanded = !collapsedPageIds.has(page.id)
+    const expanded = expandedPageIds.has(page.id)
     rows.push({
       page,
       depth,
@@ -1825,7 +1868,7 @@ function KnowledgeWorkspace({
   const [activeView, setActiveView] = useState<KnowledgeView>('wiki')
   const [agentReviewSort, setAgentReviewSort] =
     useState<AgentReviewSort>('newest')
-  const [collapsedPageIds, setCollapsedPageIds] = useState<Set<string>>(
+  const [expandedPageIds, setExpandedPageIds] = useState<Set<string>>(
     () => new Set(),
   )
   const [notesExpanded, setNotesExpanded] = useState(false)
@@ -1862,9 +1905,9 @@ function KnowledgeWorkspace({
     return buildWikiRows(
       base,
       activeSpace.rootPageId,
-      query ? new Set<string>() : collapsedPageIds,
+      query ? new Set(base.map(page => page.id)) : expandedPageIds,
     )
-  }, [activeSpace, collapsedPageIds, query, store, visiblePages])
+  }, [activeSpace, expandedPageIds, query, store, visiblePages])
 
   // F4: notes are first-class in navigation — a collapsed group below the
   // wiki tree, so a note stays reachable (and promotable) after it loses
@@ -1900,6 +1943,16 @@ function KnowledgeWorkspace({
   const selectPage = useCallback(
     (pageId: string): void => {
       if (!store) return
+      const pageById = new Map(store.pages.map(page => [page.id, page]))
+      setExpandedPageIds(current => {
+        const next = new Set(current)
+        let parentId = pageById.get(pageId)?.parentId ?? null
+        while (parentId) {
+          next.add(parentId)
+          parentId = pageById.get(parentId)?.parentId ?? null
+        }
+        return next
+      })
       setActiveView('wiki')
       mutate({ ...store, activePageId: pageId })
     },
@@ -1939,7 +1992,7 @@ function KnowledgeWorkspace({
   }
 
   const togglePage = (pageId: string): void => {
-    setCollapsedPageIds(current => {
+    setExpandedPageIds(current => {
       const next = new Set(current)
       if (next.has(pageId)) {
         next.delete(pageId)
@@ -1993,9 +2046,9 @@ function KnowledgeWorkspace({
     setNewChildParentId(parentId)
     setNewChildKind(kind)
     setNewChildTitle('')
-    setCollapsedPageIds(current => {
+    setExpandedPageIds(current => {
       const next = new Set(current)
-      next.delete(parentId)
+      next.add(parentId)
       return next
     })
   }
@@ -2026,9 +2079,9 @@ function KnowledgeWorkspace({
     )
     setNewChildTitle('')
     setNewChildParentId(parentId)
-    setCollapsedPageIds(current => {
+    setExpandedPageIds(current => {
       const next = new Set(current)
-      next.delete(parentId)
+      next.add(parentId)
       return next
     })
   }
@@ -2195,7 +2248,21 @@ function KnowledgeWorkspace({
           />
         </StyledSearch>
         <StyledPageList>
-          <StyledTreeLabel>Pages</StyledTreeLabel>
+          <StyledTreeHeading>
+            <StyledTreeLabel>Pages</StyledTreeLabel>
+            <StyledCollapseTreeButton
+              type="button"
+              aria-label="Collapse all directories"
+              title="Collapse all directories"
+              disabled={expandedPageIds.size === 0 && !notesExpanded}
+              onClick={() => {
+                setExpandedPageIds(new Set())
+                setNotesExpanded(false)
+              }}
+            >
+              <PlatformIcon icon={ListCollapse} size={15} strokeWidth={1.8} />
+            </StyledCollapseTreeButton>
+          </StyledTreeHeading>
           <StyledExplorerActions>
             <StyledExplorerButton
               type="button"

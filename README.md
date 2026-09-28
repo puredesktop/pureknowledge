@@ -26,7 +26,7 @@ Create your own spaces and pages. Agent assistance uses the host’s configured 
 
 | Area | What you use it for |
 | --- | --- |
-| **Sidebar** | Browse and select pages and knowledge resources. |
+| **Sidebar** | Browse and select pages and knowledge resources. Directories open only when you expand them; use the collapse-all icon beside Pages to close the entire tree. |
 | **Page editor** | Read and edit the current page’s content. |
 | **Page context** | Inspect page metadata and related activity or resources. |
 | **Review area** | Inspect activity and recorded agent changes, including their before/after content. |
