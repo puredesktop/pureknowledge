@@ -2,7 +2,8 @@ import { MenuButtonDropdown } from '@purescience/platform-ui/components/common/d
 import { CollectionImage } from '@purescience/platform-editor/extensions/collectionImage.ts'
 import { useKnowledgeDrop } from './hooks/useKnowledgeDrop'
 import { embedKnowledgeVideos } from './lib/knowledgeDrop'
-import { prepareCollectionDocumentHtml, normalizeCollectionDocumentHtml } from '@purescience/platform-ui/bridge/collectionDocumentHtml'
+import { prepareKnowledgeDocumentHtml } from './lib/knowledgeDocumentHtml'
+import { normalizeCollectionDocumentHtml } from '@purescience/platform-ui/bridge/collectionDocumentHtml'
 import { readPlatformFileBinary } from '@purescience/platform-ui/bridge/fs'
 import { toMd, type DocumentEditorHandle } from '@purescience/platform-editor'
 import { Badge } from '@purescience/platform-ui/components/common/feedback/Badge'
@@ -43,7 +44,6 @@ import { usePlatformBridge } from '@purescience/platform-ui/bridge/react/usePlat
 import { usePlatformViewportResource } from '@purescience/platform-ui/bridge/react/usePlatformViewportResource'
 import {
   DocumentEditor,
-  toHtml,
   useEditorExtensions,
   type SlashCommandItem,
 } from '@purescience/platform-ui/editor'
@@ -1020,8 +1020,42 @@ const StyledWikiRule = styled.hr`
   border-top: 1px solid var(--pureknowledge-content-border);
 `
 
+const StyledAssetLoadWarning = styled.div`
+  margin: 0 0 var(--pureknowledge-space-lg);
+  padding: 10px 12px;
+  border: 1px solid var(--platform-colors-warning, #a66d16);
+  border-radius: 7px;
+  background: var(--pure-chrome-well);
+  color: var(--pureknowledge-content-text);
+  font-family: var(--platform-typography-font-family);
+  font-size: 12px;
+  line-height: 1.45;
+
+  strong {
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  ul {
+    margin: 4px 0 0;
+    padding-left: 20px;
+  }
+
+  code {
+    overflow-wrap: anywhere;
+    font-family: var(--platform-typography-font-family-mono);
+  }
+`
+
 // A wiki page is read: the platform reading surface (serif 16/1.7, 72ch).
 const StyledWikiBody = styled(ReadingSurface)`
+  img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin: 0 0 var(--pureknowledge-space-lg);
+  }
+
   a[data-wiki-title] {
     color: var(--pureknowledge-accent);
     text-decoration: none;
@@ -2338,11 +2372,23 @@ function KnowledgePageEditor({
   const [editing, setEditing] = useState(false)
   const editorRef = useRef<DocumentEditorHandle>(null)
   const dropSurface = useRef<HTMLDivElement>(null)
-  const [preparedBody, setPreparedBody] = useState({ pageId: '', html: '' })
+  const [preparedBody, setPreparedBody] = useState<{
+    pageId: string
+    html: string
+    imageFailures: Array<{ path: string; message: string }>
+  }>({ pageId: '', html: '', imageFailures: [] })
   const editorHtml = preparedBody.pageId === page?.id ? preparedBody.html : ''
+  const imageFailures =
+    preparedBody.pageId === page?.id ? preparedBody.imageFailures : []
   useEffect(() => {
     let live = true
-    void prepareCollectionDocumentHtml(toHtml(bodyDraft), packagePath, readPlatformFileBinary).then(html => { if (live) setPreparedBody({ pageId: page?.id ?? '', html }) })
+    void prepareKnowledgeDocumentHtml(
+      bodyDraft,
+      packagePath,
+      readPlatformFileBinary,
+    ).then(result => {
+      if (live) setPreparedBody({ pageId: page?.id ?? '', ...result })
+    })
     return () => { live = false }
   }, [bodyDraft, packagePath, page?.id])
   const dropError = useKnowledgeDrop({ pageId: page?.id, packagePath, editing, surface: dropSurface, editor: editorRef,
@@ -2728,6 +2774,23 @@ function KnowledgePageEditor({
               )}
             </StyledWikiPageHeader>
             {dropError && <p role="alert">{dropError}</p>}
+            {imageFailures.length ? (
+              <StyledAssetLoadWarning role="alert">
+                <strong>
+                  {imageFailures.length === 1
+                    ? 'One inline image could not be loaded.'
+                    : `${imageFailures.length} inline images could not be loaded.`}
+                </strong>
+                Check that these files still exist inside this knowledge package:
+                <ul>
+                  {imageFailures.map(failure => (
+                    <li key={failure.path} title={failure.message}>
+                      <code>{failure.path}</code>
+                    </li>
+                  ))}
+                </ul>
+              </StyledAssetLoadWarning>
+            ) : null}
             {editing ? (
               <StyledEditPanel>
                 <StyledWikiMeta>

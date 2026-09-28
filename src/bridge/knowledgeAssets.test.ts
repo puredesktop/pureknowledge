@@ -60,7 +60,7 @@ describe('importKnowledgeImages', () => {
     expect(writePlatformFileBinary).not.toHaveBeenCalled()
   })
   it('rejects oversized batches before writing any files', async () => {
-    vi.mocked(readPlatformFileBinary).mockResolvedValue({ mimeType: 'image/png', base64: 'A'.repeat(25 * 1024 * 1024) })
+    vi.mocked(readPlatformFileBinary).mockResolvedValue({ path: '/images/example.png', mimeType: 'image/png', base64: 'A'.repeat(25 * 1024 * 1024), truncated: false, byteLength: 19660800 })
     await expect(importKnowledgeImages('/wiki/gallery.knowledge',
       Array.from({ length: 5 }, (_, index) => ({ sourcePath: `/images/${index}.png` })),
     )).rejects.toThrow('batch is too large')

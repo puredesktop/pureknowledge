@@ -45,7 +45,7 @@ The app exposes 9 tools, including `getKnowledgeContext`, `searchKnowledge`, `re
 
 ## Files and data
 
-Pages contain Markdown, tags, aliases, wikilinks, inline package images, and resource links. Images dropped in the editor or imported by the agent are copied into the package's `assets/` directory and stored as portable relative Markdown. Agent imports support up to 100 images, 24 MB per image and approximately 72 MB per batch. The knowledge store is available across the suite; agent changes record summaries and before/after content.
+Pages contain Markdown, tags, aliases, wikilinks, inline package images, and resource links. Images dropped in the editor or imported by the agent are copied into the package's `assets/` directory and stored as portable relative Markdown. Agent imports support up to 100 images, 24 MB per image and approximately 72 MB per batch. If an inline package image cannot be read, the page identifies its failing `assets/…` path instead of hiding the failure. The knowledge store is available across the suite; agent changes record summaries and before/after content.
 
 ## Develop and customize
 
