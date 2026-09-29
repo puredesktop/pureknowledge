@@ -190,7 +190,7 @@ const StyledAppRoot = styled.div`
   --pureknowledge-panel: var(--pure-chrome-surface);
   --pureknowledge-panel-subtle: var(--pure-chrome-well);
   --pureknowledge-panel-hover: var(--pure-chrome-hover);
-  --pureknowledge-content-bg: var(--pure-chrome-paper);
+  --pureknowledge-content-bg: var(--glass-panel);
   --pureknowledge-content-subtle: var(--pure-chrome-well);
   --pureknowledge-content-text: var(--platform-colors-text);
   --pureknowledge-content-muted: var(--pure-chrome-soft);
