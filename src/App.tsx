@@ -191,6 +191,12 @@ const StyledAppRoot = styled.div`
   --pureknowledge-panel-subtle: var(--pure-chrome-well);
   --pureknowledge-panel-hover: var(--pure-chrome-hover);
   --pureknowledge-content-bg: var(--glass-panel);
+  /* The article is read on a page: white in light, the elevated surface in dark,
+     over the well in glass and PureBook's grey in White. */
+  --pureknowledge-page: var(--platform-colors-elevated, #ffffff);
+  --pureknowledge-surround: var(--pure-chrome-well);
+  :root:not([data-platform-theme='dark']) & { --pureknowledge-page: #ffffff; }
+  :root[data-platform-appearance='white']:not([data-platform-theme='dark']) & { --pureknowledge-surround: #eceef1; }
   --pureknowledge-content-subtle: var(--pure-chrome-well);
   --pureknowledge-content-text: var(--platform-colors-text);
   --pureknowledge-content-muted: var(--pure-chrome-soft);
@@ -343,7 +349,10 @@ const StyledReviewBadgeCount = styled.span`
 `
 
 // The platform sidebar: 264 wide, sidebar colour, hairline.
-const StyledSidebar = styled(AppSidebar)``
+/** A hairline between the pane and the page. */
+const StyledSidebar = styled(AppSidebar)`
+  && { border-right: 1px solid var(--pureknowledge-border); }
+`
 
 
 const StyledSection = styled.section`
@@ -634,10 +643,13 @@ const StyledNotesHeading = styled(SidebarSectionLabel).attrs({
   }
 `
 
+/** The add actions, set off from the tree below by a hairline. */
 const StyledExplorerActions = styled.div`
   display: flex;
   gap: var(--pureknowledge-space-md);
-  margin: 0 var(--pureknowledge-space-lg) var(--pureknowledge-space-md);
+  margin: 0 0 var(--pureknowledge-space-sm);
+  padding: 0 var(--pureknowledge-space-lg) var(--pureknowledge-space-md);
+  border-bottom: 1px solid var(--pureknowledge-border);
 `
 
 const StyledExplorerButton = styled.button`
@@ -812,8 +824,8 @@ const StyledMainEditor = styled.div`
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: 22px 40px 40px;
-  background: var(--pureknowledge-content-bg);
+  padding: 32px 40px 64px;
+  background: var(--pureknowledge-surround);
   color: var(--pureknowledge-content-text);
 `
 
@@ -952,10 +964,17 @@ const StyledWikiIndex = styled.section`
   }
 `
 
+/** The article as a centred page, not a column hugging the pane. */
 const StyledWikiSurface = styled.article`
+  box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  max-width: 860px;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 48px 56px 64px;
+  background: var(--pureknowledge-page);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgb(20 24 30 / 0.05), 0 1px 2px rgb(20 24 30 / 0.06), 0 14px 36px rgb(20 24 30 / 0.08);
 `
 
 const StyledPageFooter = styled.footer`
