@@ -3102,6 +3102,16 @@ function KnowledgePageEditor({
       },
     )
 
+  // The rendered article is rebuilt only when its content or its links change.
+  // Built inline it ran on every render: with images embedded as data URLs that
+  // is tens of megabytes of regex and HTML work, and React then reset the whole
+  // article — opening or closing the image preview took over a second.
+  const renderedWikiHtml = useMemo(
+    () => addKnowledgeGalleryControls(embedKnowledgeVideos(renderWikiLinkMarkdown(editorHtml))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [editorHtml, store, page?.spaceId],
+  )
+
   const openRenderedImage = (target: EventTarget | null): boolean => {
     const preview = readKnowledgeImagePreview(target)
     if (!preview) return false
@@ -3280,7 +3290,7 @@ function KnowledgePageEditor({
         onClick={handleRenderedWikiClick}
         onKeyDown={handleRenderedWikiKeyDown}
         dangerouslySetInnerHTML={{
-          __html: addKnowledgeGalleryControls(embedKnowledgeVideos(renderWikiLinkMarkdown(editorHtml))),
+          __html: renderedWikiHtml,
         }}
       />
     )
