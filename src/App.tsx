@@ -185,6 +185,8 @@ const DeleteDialogStyle = createGlobalStyle`
 // platform's --pure-chrome-* tokens (measures, faces, theme colours) so the
 // panels read one system while the wiki's own layout stays put.
 const StyledAppRoot = styled.div`
+  /* The pane is wide enough for page titles to read whole. */
+  --pure-chrome-sidebar-width: 340px;
   --pureknowledge-bg: var(--platform-colors-bg);
   --pureknowledge-well: var(--pure-chrome-well);
   --pureknowledge-panel: var(--pure-chrome-surface);
@@ -349,12 +351,9 @@ const StyledReviewBadgeCount = styled.span`
 `
 
 // The platform sidebar: 264 wide, sidebar colour, hairline.
-/** Wide enough for page titles to read whole; a hairline between the pane and the page. */
+/** A hairline between the pane and the page. */
 const StyledSidebar = styled(AppSidebar)`
-  && {
-    --pure-chrome-sidebar-width: 340px;
-    border-right: 1px solid var(--pureknowledge-border);
-  }
+  && { border-right: 1px solid var(--pureknowledge-border); }
 `
 
 
