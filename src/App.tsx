@@ -349,9 +349,12 @@ const StyledReviewBadgeCount = styled.span`
 `
 
 // The platform sidebar: 264 wide, sidebar colour, hairline.
-/** A hairline between the pane and the page. */
+/** Wide enough for page titles to read whole; a hairline between the pane and the page. */
 const StyledSidebar = styled(AppSidebar)`
-  && { border-right: 1px solid var(--pureknowledge-border); }
+  && {
+    --pure-chrome-sidebar-width: 340px;
+    border-right: 1px solid var(--pureknowledge-border);
+  }
 `
 
 
