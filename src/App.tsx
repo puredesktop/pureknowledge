@@ -3111,6 +3111,9 @@ function KnowledgePageEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [editorHtml, store, page?.spaceId],
   )
+  // The same object each render too: React rewrites innerHTML whenever this
+  // prop object changes, even when the string inside is identical.
+  const renderedWikiInnerHtml = useMemo(() => ({ __html: renderedWikiHtml }), [renderedWikiHtml])
 
   const openRenderedImage = (target: EventTarget | null): boolean => {
     const preview = readKnowledgeImagePreview(target)
@@ -3289,9 +3292,7 @@ function KnowledgePageEditor({
       <StyledWikiBody
         onClick={handleRenderedWikiClick}
         onKeyDown={handleRenderedWikiKeyDown}
-        dangerouslySetInnerHTML={{
-          __html: renderedWikiHtml,
-        }}
+        dangerouslySetInnerHTML={renderedWikiInnerHtml}
       />
     )
   }
