@@ -1967,8 +1967,10 @@ function KnowledgeWorkspace({
       const pageById = new Map(store.pages.map(page => [page.id, page]))
       setExpandedPageIds(current => {
         const next = new Set(current)
+        // Guarded like findPagePath: a parent chain that loops (a root
+        // filed under itself, say) must not spin here.
         let parentId = pageById.get(pageId)?.parentId ?? null
-        while (parentId) {
+        while (parentId && !next.has(parentId)) {
           next.add(parentId)
           parentId = pageById.get(parentId)?.parentId ?? null
         }

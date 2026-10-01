@@ -89,6 +89,28 @@ export function extractWikiLinks(body: string): string[] {
   return [...links]
 }
 
+/**
+ * Would filing `pageId` under `parentId` make the page an ancestor of itself?
+ * True for the page itself, any of its descendants, and a parent whose own
+ * chain already loops.
+ */
+export function wouldCreateParentCycle(
+  store: KnowledgeStore,
+  pageId: string,
+  parentId: string | null,
+): boolean {
+  if (!parentId) return false
+  const pageById = new Map(store.pages.map(page => [page.id, page]))
+  const seen = new Set<string>()
+  let cursor: string | null = parentId
+  while (cursor) {
+    if (cursor === pageId || seen.has(cursor)) return true
+    seen.add(cursor)
+    cursor = pageById.get(cursor)?.parentId ?? null
+  }
+  return false
+}
+
 export function isKnowledgeDirectoryPage(page: KnowledgePage): boolean {
   return page.kind === 'wiki' && page.tags.includes(DIRECTORY_TAG)
 }
@@ -366,6 +388,9 @@ export function updateKnowledgePage(
   const tags = patch.tags ?? page.tags
   const kind = patch.kind ?? page.kind
   const parentId = patch.parentId === undefined ? page.parentId : patch.parentId
+  if (parentId !== page.parentId && wouldCreateParentCycle(store, pageId, parentId)) {
+    throw new Error(`"${page.title}" cannot be filed under itself or one of its own pages.`)
+  }
 
   if (
     title === page.title &&

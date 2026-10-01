@@ -15,6 +15,7 @@ import {
   findWikiBacklinks,
   rankKnowledgePages,
   reviewKnowledgeStore,
+  wouldCreateParentCycle,
 } from '../lib/knowledgeStore'
 import type {
   KnowledgeAgentChangeType,
@@ -454,6 +455,11 @@ export async function applyKnowledgeChangeHandler(
   if (parentRef && !parent) {
     return agentToolErrorContent(
       `No page matching "${parentRef}" to file this under. searchKnowledge lists pages.`,
+    )
+  }
+  if (existing && parent && wouldCreateParentCycle(store, existing.id, parent.id)) {
+    return agentToolErrorContent(
+      `"${existing.title}" cannot be filed under itself or one of its own pages.`,
     )
   }
   const kindArg = readAgentToolStringArg(args, 'kind')

@@ -5,6 +5,7 @@ import {
 } from './knowledgeStore'
 import {
   assembleKnowledgeStore,
+  repairKnowledgeParents,
   pageFileName,
   parsePageFile,
   planKnowledgeWrites,
@@ -13,6 +14,35 @@ import {
 } from './knowledgePages'
 
 describe('knowledge page files', () => {
+  it('cuts parent loops and dangling parents when assembling a store', () => {
+    let store = createDefaultKnowledgeStore()
+    const rootId = store.spaces[0]!.rootPageId!
+    for (const title of ['A', 'B', 'C']) {
+      store = createKnowledgePage(store, { spaceId: store.spaces[0]!.id, parentId: rootId, kind: 'wiki', title })
+    }
+    const byTitle = (title: string) => store.pages.find(page => page.title === title)!
+    const broken = store.pages.map(page => {
+      if (page.id === rootId) return { ...page, parentId: rootId }
+      if (page.title === 'A') return { ...page, parentId: byTitle('B').id }
+      if (page.title === 'B') return { ...page, parentId: byTitle('A').id }
+      if (page.title === 'C') return { ...page, parentId: 'page-gone' }
+      return page
+    })
+    const repaired = repairKnowledgeParents(broken, store.spaces)
+    const parentOf = (title: string) => repaired.find(page => page.title === title)!.parentId
+    expect(repaired.find(page => page.id === rootId)!.parentId).toBeNull()
+    expect(parentOf('C')).toBeNull()
+    expect([parentOf('A'), parentOf('B')].filter(parent => parent === null)).toHaveLength(1)
+    const assembled = assembleKnowledgeStore(
+      { spaces: store.spaces, activeSpaceId: store.activeSpaceId, activePageId: store.activePageId } as never,
+      broken,
+      [],
+      [],
+    )
+    expect(assembled.pages.find(page => page.id === rootId)!.parentId).toBeNull()
+    expect(repairKnowledgeParents(store.pages, store.spaces)).toBe(store.pages)
+  })
+
   it('round-trips a page through frontmatter + body', () => {
     let store = createDefaultKnowledgeStore()
     store = createKnowledgePage(store, {

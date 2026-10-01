@@ -113,12 +113,47 @@ export function assembleKnowledgeStore(
     // Older writers left the previous filename behind after a rename. These
     // files share an identity: choose the newest content, independent of listing
     // order, while leaving historical files on disk available for recovery.
-    pages: latestKnowledgePages(pages),
+    pages: repairKnowledgeParents(latestKnowledgePages(pages), index.spaces),
     activity,
     agentChanges: proposals,
     activeSpaceId: index.activeSpaceId ?? '',
     activePageId: index.activePageId,
   }
+}
+
+/**
+ * A parent chain must end at a root. A page filed under itself, under one of
+ * its own descendants, or under a page that no longer exists would spin
+ * every walk up the tree, so the offending link is cut: that page becomes a
+ * top-level page of its space. Space roots never have a parent.
+ */
+export function repairKnowledgeParents(
+  pages: KnowledgePage[],
+  spaces: KnowledgeStore['spaces'],
+): KnowledgePage[] {
+  const byId = new Map(pages.map(page => [page.id, page]))
+  const rootIds = new Set(spaces.map(space => space.rootPageId))
+  const parentOf = new Map(pages.map(page => [page.id, page.parentId]))
+  const cut = new Set<string>()
+  for (const page of pages) {
+    if (page.parentId && (rootIds.has(page.id) || !byId.has(page.parentId))) cut.add(page.id)
+  }
+  for (const page of pages) {
+    const seen = new Set<string>()
+    let cursor: string | null = page.id
+    while (cursor && !cut.has(cursor)) {
+      if (seen.has(cursor)) {
+        // The link that closed the loop is the last one followed.
+        cut.add(previous!)
+        break
+      }
+      seen.add(cursor)
+      var previous: string = cursor
+      cursor = parentOf.get(cursor) ?? null
+    }
+  }
+  if (cut.size === 0) return pages
+  return pages.map(page => (cut.has(page.id) ? { ...page, parentId: null } : page))
 }
 
 export function latestKnowledgePages(pages: KnowledgePage[]): KnowledgePage[] {

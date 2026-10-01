@@ -23,9 +23,25 @@ import {
   reviewKnowledgeStore,
   slugifyPageTitle,
   updateKnowledgePage,
+  wouldCreateParentCycle,
 } from './knowledgeStore'
 
 describe('knowledge store', () => {
+  it('refuses to file a page under itself or one of its own pages', () => {
+    let store = createDefaultKnowledgeStore()
+    const rootId = store.spaces[0]!.rootPageId!
+    store = createKnowledgePage(store, { spaceId: store.spaces[0]!.id, parentId: rootId, kind: 'wiki', title: 'A' })
+    const a = store.pages.find(page => page.title === 'A')!
+    store = createKnowledgePage(store, { spaceId: store.activeSpaceId, parentId: a.id, kind: 'wiki', title: 'B' })
+    const b = store.pages.find(page => page.title === 'B')!
+    expect(wouldCreateParentCycle(store, a.id, b.id)).toBe(true)
+    expect(wouldCreateParentCycle(store, a.id, a.id)).toBe(true)
+    expect(wouldCreateParentCycle(store, b.id, rootId)).toBe(false)
+    expect(() => updateKnowledgePage(store, a.id, { parentId: b.id })).toThrow(/cannot be filed under itself/)
+    expect(() => updateKnowledgePage(store, rootId, { parentId: rootId })).toThrow(/cannot be filed under itself/)
+    expect(updateKnowledgePage(store, b.id, { parentId: rootId }).pages.find(page => page.id === b.id)?.parentId).toBe(rootId)
+  })
+
   it('creates a default wiki store', () => {
     const store = createDefaultKnowledgeStore()
     expect(store.schemaVersion).toBe(1)
