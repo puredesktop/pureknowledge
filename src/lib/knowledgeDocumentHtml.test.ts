@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   prepareKnowledgeDocumentHtml,
+  prepareKnowledgeDocumentHtmlWithUrls,
   readKnowledgeImagePreview,
 } from './knowledgeDocumentHtml'
 
@@ -113,5 +114,29 @@ describe('prepareKnowledgeDocumentHtml', () => {
         .querySelector('img[src="assets/missing.svg"]')
         ?.hasAttribute('data-knowledge-image-preview'),
     ).toBe(false)
+  })
+})
+
+describe('prepareKnowledgeDocumentHtmlWithUrls', () => {
+  it('serves package images by shell URL, lazily, keeping their relative path for saving', async () => {
+    const asked: string[] = []
+    const result = await prepareKnowledgeDocumentHtmlWithUrls(
+      'Before\n\n![A tree](assets/tree.png)\n\n![Gone](assets/missing.png)\n\n![Web](https://example.org/x.png)',
+      '/kb/demo.knowledge',
+      async absolutePath => {
+        asked.push(absolutePath)
+        if (absolutePath.endsWith('missing.png')) throw new Error('ENOENT')
+        return `purescience-fs://asset/token-${absolutePath.split('/').pop()}`
+      },
+    )
+    expect(asked).toEqual(['/kb/demo.knowledge/assets/tree.png', '/kb/demo.knowledge/assets/missing.png'])
+    expect(result.html).toContain('src="purescience-fs://asset/token-tree.png"')
+    expect(result.html).toContain('data-writer-asset-src="assets/tree.png"')
+    expect(result.html).toContain('loading="lazy"')
+    expect(result.html).toContain('data-knowledge-image-preview')
+    expect(result.html).toContain('src="assets/missing.png"')
+    expect(result.html).toContain('src="https://example.org/x.png"')
+    expect(result.html).not.toContain('data:image')
+    expect(result.imageFailures).toEqual([{ path: 'assets/missing.png', message: 'ENOENT' }])
   })
 })

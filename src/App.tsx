@@ -4,6 +4,7 @@ import { useKnowledgeDrop } from './hooks/useKnowledgeDrop'
 import { embedKnowledgeVideos } from './lib/knowledgeDrop'
 import {
   prepareKnowledgeDocumentHtml,
+  prepareKnowledgeDocumentHtmlWithUrls,
   readKnowledgeImagePreview,
 } from './lib/knowledgeDocumentHtml'
 import {
@@ -19,7 +20,7 @@ import {
   type GalleryImageBackground,
 } from './lib/knowledgeGallery'
 import { saveKnowledgeImage } from './bridge/knowledgeAssets'
-import { readPlatformFileBinary } from '@purescience/platform-ui/bridge/fs'
+import { readPlatformFileBinary, readPlatformFilePreviewUrl } from '@purescience/platform-ui/bridge/fs'
 import { toMd, type DocumentEditorHandle } from '@purescience/platform-editor'
 import { Badge } from '@purescience/platform-ui/components/common/feedback/Badge'
 import { Button } from '@purescience/platform-ui/components/common/buttons/Button'
@@ -2779,17 +2780,49 @@ function KnowledgePageEditor({
   const editorHtml = preparedBody.pageId === page?.id ? preparedBody.html : ''
   const imageFailures =
     preparedBody.pageId === page?.id ? preparedBody.imageFailures : []
+  // One shell URL per package file for this session: the token outlives any
+  // page view, and asking again for every render would be the old cost back.
+  const fileUrls = useRef<{ packagePath: string; urls: Map<string, Promise<string>> }>({ packagePath: '', urls: new Map() })
+  const fileUrlFor = useCallback((absolutePath: string): Promise<string> => {
+    if (fileUrls.current.packagePath !== packagePath) fileUrls.current = { packagePath, urls: new Map() }
+    const { urls } = fileUrls.current
+    let url = urls.get(absolutePath)
+    if (!url) {
+      url = readPlatformFilePreviewUrl(absolutePath).then(result => result.url)
+      url.catch(() => urls.delete(absolutePath))
+      urls.set(absolutePath, url)
+    }
+    return url
+  }, [packagePath])
   useEffect(() => {
+    // While editing, the editor holds the page: re-preparing on every
+    // keystroke only handed the same document back to it and had it rebuilt.
+    if (editing) return
     let live = true
-    void prepareKnowledgeDocumentHtml(
-      bodyDraft,
-      packagePath,
-      readPlatformFileBinary,
-    ).then(result => {
+    const prepare = urlImagesUnavailable.current
+      ? prepareKnowledgeDocumentHtml(bodyDraft, packagePath, readPlatformFileBinary)
+      : prepareKnowledgeDocumentHtmlWithUrls(bodyDraft, packagePath, fileUrlFor)
+    void prepare.then(result => {
       if (live) setPreparedBody({ pageId: page?.id ?? '', ...result })
     })
     return () => { live = false }
-  }, [bodyDraft, packagePath, page?.id])
+  }, [bodyDraft, editing, fileUrlFor, packagePath, page?.id])
+  // If this frame cannot show the shell's file URLs, go back to inlining.
+  const urlImagesUnavailable = useRef(false)
+  useEffect(() => {
+    if (urlImagesUnavailable.current || !editorHtml.includes('src="purescience-fs://')) return
+    const first = /src="(purescience-fs:\/\/[^"]+)"/.exec(editorHtml)?.[1]
+    if (!first) return
+    const probe = new Image()
+    probe.onerror = () => {
+      urlImagesUnavailable.current = true
+      void prepareKnowledgeDocumentHtml(bodyDraft, packagePath, readPlatformFileBinary).then(result =>
+        setPreparedBody({ pageId: page?.id ?? '', ...result }),
+      )
+    }
+    probe.src = first
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorHtml])
   const dropError = useKnowledgeDrop({ pageId: page?.id, packagePath, editing, surface: dropSurface, editor: editorRef,
     insert: (drop, position) => {
       if (!page) return
@@ -3108,10 +3141,16 @@ function KnowledgePageEditor({
   // Built inline it ran on every render: with images embedded as data URLs that
   // is tens of megabytes of regex and HTML work, and React then reset the whole
   // article — opening or closing the image preview took over a second.
+  // Wikilink resolution only depends on which titles exist, so the article
+  // is not rebuilt for every save tick of the store.
+  const wikiTitleKey = useMemo(
+    () => store.pages.map(candidate => `${candidate.spaceId}\u0000${candidate.title}\u0000${candidate.slug}\u0000${(candidate.aliases ?? []).join('\u0001')}`).join('\n'),
+    [store.pages],
+  )
   const renderedWikiHtml = useMemo(
-    () => addKnowledgeGalleryControls(embedKnowledgeVideos(renderWikiLinkMarkdown(editorHtml))),
+    () => editing ? '' : addKnowledgeGalleryControls(embedKnowledgeVideos(renderWikiLinkMarkdown(editorHtml))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [editorHtml, store, page?.spaceId],
+    [editorHtml, editing, wikiTitleKey, page?.spaceId],
   )
   // The same object each render too: React rewrites innerHTML whenever this
   // prop object changes, even when the string inside is identical.
