@@ -35,6 +35,7 @@ import {
   resolveKnowledgeStoreFilePath,
   resolveKnowledgeWorkspaceTarget,
   resolveLegacyKnowledgePath,
+  splitParentPath,
 } from '../lib/knowledgePaths'
 import type { KnowledgeStore } from '../lib/knowledgeTypes'
 import {
@@ -58,6 +59,7 @@ interface UseKnowledgeWorkspaceResult {
   loading: boolean
   saving: boolean
   error: Error | null
+  saveFailed: boolean
   saveStore: (nextStore: KnowledgeStore) => Promise<void>
   /** One-line notice after an out-of-process change was picked up. */
   externalNotice: string | null
@@ -84,9 +86,15 @@ async function writeKnowledgePages(
     )
   }
   for (const fileName of plan.deletes) {
-    await deletePlatformFile(
-      joinPackagePath(packagePath, KNOWLEDGE_PAGES_DIR, fileName),
-    ).catch(() => {})
+    const path = joinPackagePath(packagePath, KNOWLEDGE_PAGES_DIR, fileName)
+    try {
+      await deletePlatformFile(path)
+    } catch (cause) {
+      const listed = await listPlatformFiles(
+        joinPackagePath(packagePath, KNOWLEDGE_PAGES_DIR),
+      )
+      if (listed.entries.some(entry => entry.name === fileName)) throw cause
+    }
   }
   if (plan.indexChanged) {
     await writeTextFile(
@@ -118,55 +126,85 @@ async function writeKnowledgePages(
   })
 }
 
+/** A failed read is missing only when a directory listing confirms it. */
+async function readOptionalFile(path: string): Promise<string | null> {
+  try {
+    return await readTextFile(path)
+  } catch (cause) {
+    const { parent, name } = splitParentPath(path)
+    try {
+      const listed = await listPlatformFiles(parent)
+      if (!listed.entries.some(entry => entry.name === name)) return null
+    } catch {
+      // A new package may not exist yet. Confirm that in its parent rather
+      // than treating access or transport failures as an empty knowledge base.
+      const ancestor = splitParentPath(parent)
+      try {
+        const listed = await listPlatformFiles(ancestor.parent)
+        if (!listed.entries.some(entry => entry.name === ancestor.name))
+          return null
+      } catch {
+        /* Unknown is not missing. */
+      }
+    }
+    throw cause
+  }
+}
+
 async function readKnowledgePagesLayout(
   packagePath: string,
 ): Promise<KnowledgeStore | null> {
-  let indexRaw: string
-  try {
-    indexRaw = await readTextFile(
-      joinPackagePath(packagePath, KNOWLEDGE_INDEX_FILE),
+  const indexPath = joinPackagePath(packagePath, KNOWLEDGE_INDEX_FILE)
+  const indexRaw = await readOptionalFile(indexPath)
+  if (indexRaw === null) return null
+  const index = JSON.parse(indexRaw) as KnowledgeIndexFile
+  if (
+    index.schemaVersion !== 2 ||
+    !Array.isArray(index.spaces) ||
+    !index.spaces.length ||
+    index.spaces.some(
+      space =>
+        !space ||
+        typeof space.id !== 'string' ||
+        typeof space.name !== 'string',
     )
-  } catch {
-    return null
-  }
-  try {
-    const index = JSON.parse(indexRaw) as KnowledgeIndexFile
-    if (index.schemaVersion !== 2 || !Array.isArray(index.spaces)) return null
-    const pagesDir = joinPackagePath(packagePath, KNOWLEDGE_PAGES_DIR)
-    const pages = []
-    try {
-      const listed = await listPlatformFiles(pagesDir)
-      for (const entry of listed.entries) {
-        if (entry.isDirectory || !entry.name.endsWith('.md')) continue
-        try {
-          const page = parsePageFile(await readTextFile(entry.path))
-          if (page) pages.push(page)
-        } catch {
-          /* one unreadable page must not take down the knowledge base */
-        }
-      }
-    } catch {
-      /* no pages dir yet */
+  )
+    throw new Error(`Invalid knowledge index: ${indexPath}`)
+  const pagesDir = joinPackagePath(packagePath, KNOWLEDGE_PAGES_DIR)
+  const listed = await listPlatformFiles(pagesDir)
+  const entries = listed.entries.filter(
+    entry => !entry.isDirectory && entry.name.endsWith('.md'),
+  )
+  const pages = new Array<NonNullable<ReturnType<typeof parsePageFile>>>(
+    entries.length,
+  )
+  let cursor = 0
+  // Bound bridge traffic while overlapping independent page reads. Keep the
+  // listing order deterministic, including duplicate-identity recovery.
+  const readPages = async () => {
+    while (cursor < entries.length) {
+      const position = cursor++
+      const entry = entries[position]!
+      const page = parsePageFile(await readTextFile(entry.path))
+      if (!page) throw new Error(`Invalid knowledge page: ${entry.path}`)
+      pages[position] = page
     }
-    const readJsonArray = async (fileName: string) => {
-      try {
-        const parsed = JSON.parse(
-          await readTextFile(joinPackagePath(packagePath, fileName)),
-        )
-        return Array.isArray(parsed) ? parsed : []
-      } catch {
-        return []
-      }
-    }
-    return assembleKnowledgeStore(
-      index,
-      pages,
-      await readJsonArray(KNOWLEDGE_ACTIVITY_FILE),
-      await readJsonArray(KNOWLEDGE_PROPOSALS_FILE),
-    )
-  } catch {
-    return null
   }
+  const readJsonArray = async (fileName: string) => {
+    const path = joinPackagePath(packagePath, fileName)
+    const raw = await readOptionalFile(path)
+    if (raw === null) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed))
+      throw new Error(`Invalid knowledge history: ${path}`)
+    return parsed
+  }
+  const [, activity, proposals] = await Promise.all([
+    Promise.all(Array.from({ length: Math.min(8, entries.length) }, readPages)),
+    readJsonArray(KNOWLEDGE_ACTIVITY_FILE),
+    readJsonArray(KNOWLEDGE_PROPOSALS_FILE),
+  ])
+  return assembleKnowledgeStore(index, pages, activity, proposals)
 }
 
 export function useKnowledgeWorkspace(
@@ -177,23 +215,48 @@ export function useKnowledgeWorkspace(
   // "Shell converts, app decides": a .knowledge package rebinds the
   // store; a plain .md/.txt resource is an IMPORT into the current store
   // and must never change the bound storePath.
-  const { packagePath, importFilePath } = useMemo(
-    () =>
-      resolveKnowledgeWorkspaceTarget(
-        resourcePath,
-        boot.appSettings.storePath,
-        boot.prefs.workingDirectory,
-      ),
-    [boot.appSettings.storePath, boot.prefs.workingDirectory, resourcePath],
-  )
+  const boundPackageRef = useRef(boot.appSettings.storePath)
+  const { packagePath, importFilePath } = useMemo(() => {
+    const target = resolveKnowledgeWorkspaceTarget(
+      resourcePath,
+      boundPackageRef.current ?? boot.appSettings.storePath,
+      boot.prefs.workingDirectory,
+    )
+    // Clearing a handled resource is not an instruction to reopen the boot
+    // package. Imports likewise belong to the currently bound knowledge base.
+    if (resourcePath && !target.importFilePath)
+      boundPackageRef.current = target.packagePath
+    return target
+  }, [boot.appSettings.storePath, boot.prefs.workingDirectory, resourcePath])
   const storePath = packagePath
   const [store, setStore] = useState<KnowledgeStore | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [saveFailed, setSaveFailed] = useState(false)
   const [error, setError] = useState<Error | null>(null)
   const [externalNotice, setExternalNotice] = useState<string | null>(null)
   const [pendingImport, setPendingImport] = useState<string | null>(null)
-  const previousStoreRef = useRef<KnowledgeStore | null>(null)
+  const workspaceRef = useRef<{
+    path: string
+    local: KnowledgeStore | null
+    durable: KnowledgeStore | null
+    pending: number
+    revision: number
+    reload: number
+  } | null>(null)
+  if (workspaceRef.current?.path !== packagePath) {
+    workspaceRef.current = {
+      path: packagePath,
+      local: null,
+      durable: null,
+      pending: 0,
+      revision: 0,
+      reload: 0,
+    }
+  }
+  const workspace = workspaceRef.current
+  const handledRef = useRef(onResourceHandled)
+  handledRef.current = onResourceHandled
   const saveChainRef = useRef<Promise<void>>(Promise.resolve())
   const importedPathsRef = useRef<Set<string>>(new Set())
 
@@ -208,28 +271,42 @@ export function useKnowledgeWorkspace(
     async function loadStore(): Promise<void> {
       setLoading(true)
       setError(null)
+      setStore(null)
+      setSaving(false)
+      setSaveFailed(false)
+      setExternalNotice(null)
       try {
-        let nextStore: KnowledgeStore | null =
-          await readKnowledgePagesLayout(packagePath)
+        await saveChainRef.current
+        if (cancelled) return
+        let nextStore: KnowledgeStore | null = await readKnowledgePagesLayout(
+          packagePath,
+        )
         if (!nextStore) {
           // Migration: split whichever legacy blob exists into the
           // page-per-file layout, keeping the blob as a backup.
           const storeFilePath = resolveKnowledgeStoreFilePath(packagePath)
-          let migratedFromBlob = false
-          try {
-            nextStore = parseKnowledgeStore(await readTextFile(storeFilePath))
-            migratedFromBlob = true
-          } catch {
-            try {
-              nextStore = parseKnowledgeStore(
-                await readTextFile(
+          const blob = await readOptionalFile(storeFilePath)
+          const legacy =
+            blob === null
+              ? await readOptionalFile(
                   resolveLegacyKnowledgePath(boot.prefs.workingDirectory),
-                ),
+                )
+              : null
+          if (blob !== null || legacy !== null) {
+            const raw = blob ?? legacy!
+            const parsed = JSON.parse(raw) as Partial<KnowledgeStore>
+            if (
+              parsed.schemaVersion !== 1 ||
+              !Array.isArray(parsed.pages) ||
+              !Array.isArray(parsed.spaces)
+            )
+              throw new Error(
+                'Invalid legacy knowledge store. The original file has been kept.',
               )
-            } catch {
-              nextStore = createDefaultKnowledgeStore()
-            }
-          }
+            nextStore = parseKnowledgeStore(raw)
+          } else nextStore = createDefaultKnowledgeStore()
+          const migratedFromBlob = blob !== null
+          if (cancelled) return
           await writeKnowledgePages(packagePath, null, nextStore)
           if (migratedFromBlob) {
             await renamePlatformFile(
@@ -238,10 +315,13 @@ export function useKnowledgeWorkspace(
             ).catch(() => {})
           }
         }
+        if (cancelled) return
         await updateKnowledgeSettings({ storePath: packagePath })
-        onResourceHandled?.()
+        if (cancelled) return
+        if (!importFilePath) handledRef.current?.()
         if (!cancelled) {
-          previousStoreRef.current = nextStore
+          workspace.local = nextStore
+          workspace.durable = nextStore
           setStore(nextStore)
         }
       } catch (loadError) {
@@ -262,7 +342,7 @@ export function useKnowledgeWorkspace(
     return () => {
       cancelled = true
     }
-  }, [boot.prefs.workingDirectory, onResourceHandled, packagePath])
+  }, [boot.prefs.workingDirectory, packagePath, workspace])
 
   /**
    * Re-read the package after another instance's write and fold it into
@@ -270,24 +350,44 @@ export function useKnowledgeWorkspace(
    * (kept, and named in the notice) — see mergeExternalKnowledgeStore.
    */
   const reloadFromDisk = useCallback(async (): Promise<void> => {
-    const incoming = await readKnowledgePagesLayout(packagePath).catch(
-      () => null,
-    )
-    if (!incoming) return
-    const local = previousStoreRef.current
-    if (!local) {
-      previousStoreRef.current = incoming
-      setStore(incoming)
-      return
+    const request = ++workspace.reload
+    await saveChainRef.current
+    const revision = workspace.revision
+    try {
+      const incoming = await readKnowledgePagesLayout(packagePath)
+      if (
+        workspaceRef.current !== workspace ||
+        request !== workspace.reload ||
+        !incoming
+      )
+        return
+      // A save queued during the read must finish before checking disk again;
+      // an older read must never become that save's durable baseline.
+      if (revision !== workspace.revision) {
+        void reloadFromDisk()
+        return
+      }
+      const merged = workspace.local
+        ? mergeExternalKnowledgeStore(
+            workspace.local,
+            incoming,
+            workspace.durable,
+          )
+        : null
+      workspace.durable = incoming
+      workspace.local = merged?.store ?? incoming
+      setStore(workspace.local)
+      setExternalNotice(
+        merged
+          ? describeExternalReload(merged) ??
+              'Reloaded changes made outside this window'
+          : null,
+      )
+    } catch (cause) {
+      if (workspaceRef.current === workspace && request === workspace.reload)
+        setError(cause instanceof Error ? cause : new Error(String(cause)))
     }
-    const merged = mergeExternalKnowledgeStore(local, incoming)
-    previousStoreRef.current = merged.store
-    setStore(merged.store)
-    setExternalNotice(
-      describeExternalReload(merged) ??
-        'Reloaded changes made outside this window',
-    )
-  }, [packagePath])
+  }, [packagePath, workspace])
 
   useEffect(() => {
     if (!externalNotice) return
@@ -317,47 +417,63 @@ export function useKnowledgeWorkspace(
 
   const saveStore = useCallback(
     async (nextStore: KnowledgeStore) => {
-      const previous = previousStoreRef.current
-      previousStoreRef.current = nextStore
+      if (workspaceRef.current !== workspace || !workspace.local)
+        throw new Error('The knowledge workspace is not ready to save.')
+      workspace.local = nextStore
+      ++workspace.revision
+      ++workspace.pending
       setStore(nextStore)
       setSaving(true)
       setError(null)
       const run = saveChainRef.current.then(async () => {
-        await writeKnowledgePages(packagePath, previous, nextStore)
-        await updateKnowledgeSettings({
-          storePath: packagePath,
-          activeSpaceId: nextStore.activeSpaceId,
-          activePageId: nextStore.activePageId ?? undefined,
-        })
+        // Diff against acknowledged disk state, never optimistic UI state.
+        await writeKnowledgePages(packagePath, workspace.durable, nextStore)
+        workspace.durable = nextStore
+        if (workspaceRef.current === workspace)
+          await updateKnowledgeSettings({
+            storePath: packagePath,
+            activeSpaceId: nextStore.activeSpaceId,
+            activePageId: nextStore.activePageId ?? undefined,
+          })
       })
       saveChainRef.current = run.catch(() => {})
       try {
         await run
+        if (workspaceRef.current === workspace && workspace.pending === 1) {
+          setError(null)
+          setSaveFailed(false)
+        }
       } catch (saveError) {
         const error =
           saveError instanceof Error ? saveError : new Error(String(saveError))
-        setError(error)
+        if (workspaceRef.current === workspace) {
+          setError(error)
+          setSaveFailed(true)
+        }
         throw error
       } finally {
-        setSaving(false)
+        --workspace.pending
+        if (workspaceRef.current === workspace) setSaving(workspace.pending > 0)
       }
     },
-    [packagePath],
+    [packagePath, workspace],
   )
 
   // Import an opened .md/.txt file as a new page in the CURRENT store:
   // title from the file name, body from its content. storePath is not
   // touched — the file was input, never a knowledge base.
   useEffect(() => {
-    if (!pendingImport || loading) return
-    if (importedPathsRef.current.has(pendingImport)) return
-    importedPathsRef.current.add(pendingImport)
+    if (!pendingImport || loading || !workspace.local) return
+    const importKey = `${packagePath}:${pendingImport}`
+    if (importedPathsRef.current.has(importKey)) return
+    importedPathsRef.current.add(importKey)
     const importPath = pendingImport
     setPendingImport(null)
     void (async () => {
       try {
         const body = await readTextFile(importPath)
-        const current = previousStoreRef.current
+        if (workspaceRef.current !== workspace) return
+        const current = workspace.local
         if (!current) return
         const space =
           current.spaces.find(
@@ -385,16 +501,27 @@ export function useKnowledgeWorkspace(
           refs: { path: importPath },
         }).catch(() => undefined)
       } catch (importError) {
+        importedPathsRef.current.delete(importKey)
+        if (workspaceRef.current !== workspace) return
         setError(
           importError instanceof Error
             ? importError
             : new Error(String(importError)),
         )
       } finally {
-        onResourceHandled?.()
+        if (workspaceRef.current === workspace) handledRef.current?.()
       }
     })()
-  }, [loading, onResourceHandled, pendingImport, saveStore])
+  }, [loading, packagePath, pendingImport, saveStore, workspace])
 
-  return { store, storePath, loading, saving, error, saveStore, externalNotice }
+  return {
+    store: workspace.local ? store : null,
+    storePath,
+    loading,
+    saving,
+    error,
+    saveFailed,
+    saveStore,
+    externalNotice,
+  }
 }

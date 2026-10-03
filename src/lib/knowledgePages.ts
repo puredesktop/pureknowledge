@@ -54,7 +54,11 @@ export function pageFileName(page: KnowledgePage): string {
 
 export function serializePageFile(page: KnowledgePage): string {
   const { body, ...meta } = page
-  return `${FRONTMATTER_OPEN}${JSON.stringify(meta, null, 2)}${FRONTMATTER_CLOSE}${body}`
+  return `${FRONTMATTER_OPEN}${JSON.stringify(
+    meta,
+    null,
+    2,
+  )}${FRONTMATTER_CLOSE}${body}`
 }
 
 export function parsePageFile(raw: string): KnowledgePage | null {
@@ -65,7 +69,15 @@ export function parsePageFile(raw: string): KnowledgePage | null {
     const meta = JSON.parse(
       raw.slice(FRONTMATTER_OPEN.length, close),
     ) as PageMeta
-    if (typeof meta.id !== 'string' || typeof meta.spaceId !== 'string') {
+    if (
+      !meta ||
+      ['id', 'spaceId', 'title', 'slug', 'createdAt', 'updatedAt'].some(
+        key => typeof meta[key as keyof PageMeta] !== 'string',
+      ) ||
+      (meta.kind !== 'wiki' && meta.kind !== 'note') ||
+      !Array.isArray(meta.tags) ||
+      !Array.isArray(meta.links)
+    ) {
       return null
     }
     const body = raw.slice(close + FRONTMATTER_CLOSE.length)
@@ -136,24 +148,30 @@ export function repairKnowledgeParents(
   const parentOf = new Map(pages.map(page => [page.id, page.parentId]))
   const cut = new Set<string>()
   for (const page of pages) {
-    if (page.parentId && (rootIds.has(page.id) || !byId.has(page.parentId))) cut.add(page.id)
+    if (page.parentId && (rootIds.has(page.id) || !byId.has(page.parentId)))
+      cut.add(page.id)
   }
+  const settled = new Set<string>()
   for (const page of pages) {
     const seen = new Set<string>()
     let cursor: string | null = page.id
-    while (cursor && !cut.has(cursor)) {
+    let previous: string | null = null
+    while (cursor && !cut.has(cursor) && !settled.has(cursor)) {
       if (seen.has(cursor)) {
         // The link that closed the loop is the last one followed.
         cut.add(previous!)
         break
       }
       seen.add(cursor)
-      var previous: string = cursor
+      previous = cursor
       cursor = parentOf.get(cursor) ?? null
     }
+    for (const id of seen) settled.add(id)
   }
   if (cut.size === 0) return pages
-  return pages.map(page => (cut.has(page.id) ? { ...page, parentId: null } : page))
+  return pages.map(page =>
+    cut.has(page.id) ? { ...page, parentId: null } : page,
+  )
 }
 
 export function latestKnowledgePages(pages: KnowledgePage[]): KnowledgePage[] {
@@ -164,8 +182,12 @@ export function latestKnowledgePages(pages: KnowledgePage[]): KnowledgePage[] {
   }
   for (const page of pages) {
     const current = byId.get(page.id)
-    if (!current || timestamp(page) > timestamp(current) ||
-      (timestamp(page) === timestamp(current) && serializePageFile(page) > serializePageFile(current))) {
+    if (
+      !current ||
+      timestamp(page) > timestamp(current) ||
+      (timestamp(page) === timestamp(current) &&
+        serializePageFile(page) > serializePageFile(current))
+    ) {
       byId.set(page.id, page)
     }
   }
@@ -191,9 +213,7 @@ export function planKnowledgeWrites(
   previous: KnowledgeStore | null,
   next: KnowledgeStore,
 ): KnowledgePageWritePlan {
-  const prevById = new Map(
-    (previous?.pages ?? []).map(page => [page.id, page]),
-  )
+  const prevById = new Map((previous?.pages ?? []).map(page => [page.id, page]))
   const nextById = new Map(next.pages.map(page => [page.id, page]))
   const writes: Array<{ fileName: string; content: string }> = []
   for (const page of next.pages) {
