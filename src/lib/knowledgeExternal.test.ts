@@ -41,8 +41,6 @@ describe('package-change routing', () => {
     ).toBe(false)
     expect(isKnowledgePackageChange('', PACKAGE)).toBe(false)
   })
-
-
 })
 
 describe('mergeExternalKnowledgeStore', () => {
@@ -142,6 +140,35 @@ describe('mergeExternalKnowledgeStore', () => {
     const merged = mergeExternalKnowledgeStore(local, incoming)
     expect(merged.store.pages.some(page => page.id === doomedId)).toBe(true)
     expect(merged.changedFromIncoming).toBe(true)
+  })
+
+  it('honours external deletions of pages already saved locally', () => {
+    const local = storeWithPage('Saved page', 'body')
+    const removed = local.pages[0]!
+    const incoming = {
+      ...local,
+      pages: local.pages.filter(page => page.id !== removed.id),
+      activePageId: null,
+    }
+    const merged = mergeExternalKnowledgeStore(local, incoming, local)
+    expect(merged.store.pages.some(page => page.id === removed.id)).toBe(false)
+    expect(merged.store.activePageId).not.toBe(removed.id)
+    expect(merged.changedFromIncoming).toBe(false)
+  })
+
+  it('keeps unsaved content even when timestamps match the external edit', () => {
+    const baseline = storeWithPage('Shared', 'base')
+    const local = {
+      ...baseline,
+      pages: baseline.pages.map(page => ({ ...page, body: 'local edit' })),
+    }
+    const incoming = {
+      ...baseline,
+      pages: baseline.pages.map(page => ({ ...page, body: 'external edit' })),
+    }
+    const merged = mergeExternalKnowledgeStore(local, incoming, baseline)
+    expect(merged.store.pages[0]!.body).toBe('local edit')
+    expect(merged.conflicts).toContain(local.pages[0]!.title)
   })
 
   it('reports no notice when nothing conflicted', () => {
