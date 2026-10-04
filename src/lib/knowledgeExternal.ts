@@ -1,5 +1,5 @@
 /** Merge content written by another app instance into the local state. */
-import { latestKnowledgePages } from './knowledgePages'
+import { latestKnowledgePages, serializePageFile } from './knowledgePages'
 import type { KnowledgeStore } from './knowledgeTypes'
 
 /** Does a changed path belong to this package? */
@@ -43,16 +43,27 @@ function latestTimestamp(a: string | undefined, b: string | undefined): number {
  *   - a page only the local store carries is kept (a just-created page
  *     mid-save; resurrecting an outside deletion is the safe failure —
  *     content is never silently dropped).
+ * With an acknowledged baseline, external deletions remove unchanged saved
+ * pages while newly created or unsaved pages remain protected.
  * Selection (active space/page) stays local when still valid. Activity
  * and the agent log are unioned by id, newest first.
  */
 export function mergeExternalKnowledgeStore(
   local: KnowledgeStore,
   incoming: KnowledgeStore,
+  durable?: KnowledgeStore | null,
 ): KnowledgeExternalMergeResult {
   local = { ...local, pages: latestKnowledgePages(local.pages) }
   incoming = { ...incoming, pages: latestKnowledgePages(incoming.pages) }
   const conflicts: string[] = []
+  const durableById = new Map(durable?.pages.map(page => [page.id, page]) ?? [])
+  const hasLocalEdit = (page: KnowledgeStore['pages'][number]) => {
+    const saved = durableById.get(page.id)
+    return (
+      !saved ||
+      (saved !== page && serializePageFile(saved) !== serializePageFile(page))
+    )
+  }
   const localPagesById = new Map(local.pages.map(page => [page.id, page]))
   const incomingIds = new Set(incoming.pages.map(page => page.id))
 
@@ -62,22 +73,34 @@ export function mergeExternalKnowledgeStore(
     const localAt = Date.parse(localPage.updatedAt)
     const incomingAt = Date.parse(incomingPage.updatedAt)
     if (
-      Number.isFinite(localAt) &&
-      Number.isFinite(incomingAt) &&
-      localAt > incomingAt
+      durable
+        ? hasLocalEdit(localPage)
+        : Number.isFinite(localAt) &&
+          Number.isFinite(incomingAt) &&
+          localAt > incomingAt
     ) {
       conflicts.push(localPage.title)
       return localPage
     }
     return incomingPage
   })
-  const localOnlyPages = local.pages.filter(page => !incomingIds.has(page.id))
+  const localOnlyPages = local.pages.filter(
+    page => !incomingIds.has(page.id) && (!durable || hasLocalEdit(page)),
+  )
   const mergedPages = [...localOnlyPages, ...pages]
 
   const incomingSpaceIds = new Set(incoming.spaces.map(space => space.id))
+  const durableSpaceIds = new Set(durable?.spaces.map(space => space.id) ?? [])
+  const localOnlySpaceIds = new Set(localOnlyPages.map(page => page.spaceId))
   const spaces = [
     ...incoming.spaces,
-    ...local.spaces.filter(space => !incomingSpaceIds.has(space.id)),
+    ...local.spaces.filter(
+      space =>
+        !incomingSpaceIds.has(space.id) &&
+        (!durable ||
+          !durableSpaceIds.has(space.id) ||
+          localOnlySpaceIds.has(space.id)),
+    ),
   ]
 
   const mergeById = <T extends { id: string }>(
@@ -90,7 +113,8 @@ export function mergeExternalKnowledgeStore(
       if (!byId.has(item.id)) byId.set(item.id, item)
     }
     return [...byId.values()].sort(
-      (x, y) => latestTimestamp(at(y), undefined) - latestTimestamp(at(x), undefined),
+      (x, y) =>
+        latestTimestamp(at(y), undefined) - latestTimestamp(at(x), undefined),
     )
   }
 
@@ -105,7 +129,8 @@ export function mergeExternalKnowledgeStore(
     ? local.activeSpaceId
     : incoming.activeSpaceId
   const activePageId =
-    local.activePageId && mergedPages.some(page => page.id === local.activePageId)
+    local.activePageId &&
+    mergedPages.some(page => page.id === local.activePageId)
       ? local.activePageId
       : incoming.activePageId
 

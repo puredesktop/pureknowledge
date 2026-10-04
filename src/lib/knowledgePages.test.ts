@@ -18,9 +18,15 @@ describe('knowledge page files', () => {
     let store = createDefaultKnowledgeStore()
     const rootId = store.spaces[0]!.rootPageId!
     for (const title of ['A', 'B', 'C']) {
-      store = createKnowledgePage(store, { spaceId: store.spaces[0]!.id, parentId: rootId, kind: 'wiki', title })
+      store = createKnowledgePage(store, {
+        spaceId: store.spaces[0]!.id,
+        parentId: rootId,
+        kind: 'wiki',
+        title,
+      })
     }
-    const byTitle = (title: string) => store.pages.find(page => page.title === title)!
+    const byTitle = (title: string) =>
+      store.pages.find(page => page.title === title)!
     const broken = store.pages.map(page => {
       if (page.id === rootId) return { ...page, parentId: rootId }
       if (page.title === 'A') return { ...page, parentId: byTitle('B').id }
@@ -29,18 +35,49 @@ describe('knowledge page files', () => {
       return page
     })
     const repaired = repairKnowledgeParents(broken, store.spaces)
-    const parentOf = (title: string) => repaired.find(page => page.title === title)!.parentId
+    const parentOf = (title: string) =>
+      repaired.find(page => page.title === title)!.parentId
     expect(repaired.find(page => page.id === rootId)!.parentId).toBeNull()
     expect(parentOf('C')).toBeNull()
-    expect([parentOf('A'), parentOf('B')].filter(parent => parent === null)).toHaveLength(1)
+    expect(
+      [parentOf('A'), parentOf('B')].filter(parent => parent === null),
+    ).toHaveLength(1)
     const assembled = assembleKnowledgeStore(
-      { spaces: store.spaces, activeSpaceId: store.activeSpaceId, activePageId: store.activePageId } as never,
+      {
+        spaces: store.spaces,
+        activeSpaceId: store.activeSpaceId,
+        activePageId: store.activePageId,
+      } as never,
       broken,
       [],
       [],
     )
-    expect(assembled.pages.find(page => page.id === rootId)!.parentId).toBeNull()
+    expect(
+      assembled.pages.find(page => page.id === rootId)!.parentId,
+    ).toBeNull()
     expect(repairKnowledgeParents(store.pages, store.spaces)).toBe(store.pages)
+  })
+
+  it('rejects metadata that would crash the editor', () => {
+    const page = createDefaultKnowledgeStore().pages[0]!
+    const raw = serializePageFile(page)
+    expect(
+      parsePageFile(raw.replace(`"title": "${page.title}"`, '"title": null')),
+    ).toBeNull()
+    expect(
+      parsePageFile(raw.replace(/"tags": \[[\s\S]*?\]/, '"tags": null')),
+    ).toBeNull()
+  })
+
+  it('repairs a deep chain in one traversal per page', () => {
+    const store = createDefaultKnowledgeStore()
+    const template = store.pages[0]!
+    const pages = Array.from({ length: 12000 }, (_, index) => ({
+      ...template,
+      id: `page-${index}`,
+      parentId: index < 11999 ? `page-${index + 1}` : null,
+    }))
+    expect(repairKnowledgeParents(pages, [])).toBe(pages)
   })
 
   it('round-trips a page through frontmatter + body', () => {
@@ -114,18 +151,41 @@ describe('knowledge page files', () => {
 it('removes the previous filename after a renamed page is written', () => {
   const before = createDefaultKnowledgeStore()
   const page = before.pages[0]!
-  const after = { ...before, pages: [{ ...page, title: 'Renamed', slug: 'renamed' }] }
+  const after = {
+    ...before,
+    pages: [{ ...page, title: 'Renamed', slug: 'renamed' }],
+  }
   const plan = planKnowledgeWrites(before, after)
-  expect(plan.writes.map(write => write.fileName)).toEqual([pageFileName(after.pages[0]!)])
+  expect(plan.writes.map(write => write.fileName)).toEqual([
+    pageFileName(after.pages[0]!),
+  ])
   expect(plan.deletes).toEqual([pageFileName(page)])
 })
 it('loads the newest version of a duplicate identity regardless of directory order', () => {
   const store = createDefaultKnowledgeStore()
-  const older = { ...store.pages[0]!, title: 'Old title', updatedAt: '2026-01-01T00:00:00Z', body: 'old' }
-  const newer = { ...older, title: 'New title', updatedAt: '2026-01-02T00:00:00Z', body: 'new' }
+  const older = {
+    ...store.pages[0]!,
+    title: 'Old title',
+    updatedAt: '2026-01-01T00:00:00Z',
+    body: 'old',
+  }
+  const newer = {
+    ...older,
+    title: 'New title',
+    updatedAt: '2026-01-02T00:00:00Z',
+    body: 'new',
+  }
   const other = { ...newer, id: 'different-page' }
-  for (const pages of [[older, newer, other], [newer, older, other]]) {
-    const result = assembleKnowledgeStore(JSON.parse(serializeKnowledgeIndex(store)), pages, [], [])
+  for (const pages of [
+    [older, newer, other],
+    [newer, older, other],
+  ]) {
+    const result = assembleKnowledgeStore(
+      JSON.parse(serializeKnowledgeIndex(store)),
+      pages,
+      [],
+      [],
+    )
     expect(result.pages).toHaveLength(2)
     expect(result.pages.find(page => page.id === older.id)).toEqual(newer)
   }

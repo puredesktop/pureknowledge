@@ -309,7 +309,7 @@ const StyledHeaderSpacer = styled.div`
   flex: 1;
 `
 
-const StyledSavedDot = styled(MetaText)<{ $saving: boolean }>`
+const StyledSavedDot = styled(MetaText)<{ $saving: boolean; $error: boolean }>`
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -320,8 +320,10 @@ const StyledSavedDot = styled(MetaText)<{ $saving: boolean }>`
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: ${({ $saving }) =>
-      $saving ? 'var(--platform-colors-warning)' : 'var(--platform-colors-success)'};
+    background: ${({ $saving, $error }) =>
+      $error
+        ? 'var(--platform-colors-error)'
+        : $saving ? 'var(--platform-colors-warning)' : 'var(--platform-colors-success)'};
   }
 `
 
@@ -1851,7 +1853,7 @@ function KnowledgeWorkspace({
   resourcePath: string | null
   onResourceHandled: () => void
 }): React.ReactElement {
-  const { store, storePath, loading, saving, error, saveStore, externalNotice } =
+  const { store, storePath, loading, saving, error, saveFailed, saveStore, externalNotice } =
     useKnowledgeWorkspace(boot, resourcePath, onResourceHandled)
   useKnowledgeAgentTools(true, { store, saveStore, storePath })
   const [query, setQuery] = useState('')
@@ -1957,7 +1959,7 @@ function KnowledgeWorkspace({
 
   const mutate = useCallback(
     (nextStore: KnowledgeStore): void => {
-      void saveStore(nextStore)
+      void saveStore(nextStore).catch(() => undefined)
     },
     [saveStore],
   )
@@ -2239,9 +2241,24 @@ function KnowledgeWorkspace({
             {externalNotice}
           </StyledExternalNotice>
         ) : null}
-        <StyledSavedDot $saving={saving} aria-live="polite">
-          {saving ? 'Saving…' : 'Saved'}
+        <StyledSavedDot
+          $saving={saving}
+          $error={Boolean(error)}
+          aria-live="polite"
+          title={error?.message}
+        >
+          {saving ? 'Saving…' : error ? (saveFailed ? 'Save failed' : 'Needs attention') : 'Saved'}
         </StyledSavedDot>
+        {saveFailed && !saving ? (
+          <Button
+            variant="subtle"
+            size="sm"
+            title={error?.message}
+            onClick={() => void saveStore(store).catch(() => undefined)}
+          >
+            Retry save
+          </Button>
+        ) : null}
         {(spaceAgentChanges.length > 0 ||
           activeView === 'agent-review') && (
           <StyledReviewBadge
