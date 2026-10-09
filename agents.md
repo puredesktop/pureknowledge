@@ -180,3 +180,7 @@ rejecting legacy agent proposals; and an agent-lane entry for every
 `applyKnowledgeChange` write, carrying the agent's name and one-line
 summary. The ledger is the canonical record for the PureAssistant tab;
 the in-package activity feed stays as in-app history only.
+
+## Personal assistant memory
+
+`readPersonalAssistantMemory` reads a bounded overview without writes. `personalAssistantMemory` saves durable facts below the Personal assistant root. Use `read` before relying on personal context; use `remember` only for facts the user wants retained. The tool creates the root when first needed, preserves the user's selected page and records writes in the normal audit log. Updating a fact requires its current `expectedUpdatedAt`. Never store credentials or transient chatter.
