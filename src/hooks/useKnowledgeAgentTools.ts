@@ -1,3 +1,4 @@
+import {personalAssistantMemoryHandler} from '../agents/personalAssistantMemory'
 import { useRef } from 'react'
 import { usePlatformAgentTools } from '@purescience/platform-ui/bridge/react/usePlatformAgentTools'
 import {
@@ -31,6 +32,8 @@ export function useKnowledgeAgentTools(
     logLabel: PUREKNOWLEDGE_AGENT_LOG_LABEL,
     errorType: AgentKnowledgeToolError,
     handlers: {
+      readPersonalAssistantMemory: async () => personalAssistantMemoryHandler(contextRef.current, {action: 'read'}),
+      personalAssistantMemory: async invoke => personalAssistantMemoryHandler(contextRef.current, invoke.arguments ?? {}),
       getKnowledgeContext: async () =>
         getKnowledgeContextHandler(contextRef.current),
       searchKnowledge: async invoke =>

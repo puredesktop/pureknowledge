@@ -2,6 +2,8 @@ import type { KnowledgeStore } from '../lib/knowledgeTypes'
 
 /** Keep in sync with `plugin.json` -> `app.agents.tools[].name`. */
 export const PUREKNOWLEDGE_AGENT_TOOL_NAMES = [
+  'personalAssistantMemory',
+  'readPersonalAssistantMemory',
   'getKnowledgeContext',
   'searchKnowledge',
   'readKnowledgePage',

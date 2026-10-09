@@ -269,6 +269,54 @@
             }
           },
           "requiresApproval": false
+        },
+        {
+          "name": "personalAssistantMemory",
+          "description": "Read durable memories under the Personal assistant root, or remember a fact the user asked to retain. Creates the root in the active collection if needed. Updates require expectedUpdatedAt from a read. Saves normally, records before/after, returns actual page paths. No credentials.",
+          "risk": "write",
+          "requiresApproval": true,
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "read",
+                  "remember"
+                ]
+              },
+              "title": {
+                "type": "string",
+                "maxLength": 160
+              },
+              "body": {
+                "type": "string",
+                "maxLength": 16000
+              },
+              "summary": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "expectedUpdatedAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "name": "readPersonalAssistantMemory",
+          "description": "Read a bounded overview of durable facts under the Personal assistant root, with page identities, revisions and paths. No writes. Use readKnowledgePage to read full pages when needed.",
+          "risk": "read",
+          "requiresApproval": false,
+          "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
         }
       ]
     },
