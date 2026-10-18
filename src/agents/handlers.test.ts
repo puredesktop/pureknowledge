@@ -86,6 +86,35 @@ describe('applyKnowledgeChange ledger wiring', () => {
     })
   })
 
+  it('accepts empty image lists for text-only creates and updates without importing files', async () => {
+    let saved = createDefaultKnowledgeStore()
+    const context = { ...contextFor(saved), saveStore: async (next: typeof saved) => { saved = next } }
+    const created = await applyKnowledgeChangeHandler(context, {
+      action: 'create', title: 'Career evidence', body: 'Supported facts.', summary: 'Save evidence.', importAssets: [],
+    })
+    expect(created.content).toContain('applied')
+    const page = saved.pages.find(page => page.title === 'Career evidence')!
+    const updated = await applyKnowledgeChangeHandler({ ...context, store: saved }, {
+      action: 'update', page: page.id, body: 'Updated facts.', summary: 'Update evidence.', importAssets: [],
+    })
+    expect(updated.content).toContain('applied')
+    expect(saved.pages.find(item => item.id === page.id)?.body).toBe('Updated facts.')
+    expect(importKnowledgeImages).not.toHaveBeenCalled()
+  })
+
+  it('still refuses an empty image-only write and malformed image arguments', async () => {
+    const context = contextFor(createDefaultKnowledgeStore())
+    const empty = await applyKnowledgeChangeHandler(context, {
+      action: 'create', title: 'Empty page', summary: 'Create.', importAssets: [],
+    })
+    expect(empty.content).toContain('Pass "body"')
+    const malformed = await applyKnowledgeChangeHandler(context, {
+      action: 'create', title: 'Text', body: 'Text.', summary: 'Create.', importAssets: 'not an array',
+    })
+    expect(malformed.content).toContain('must be an array')
+    expect(importKnowledgeImages).not.toHaveBeenCalled()
+  })
+
   it('does not record when the write is refused', async () => {
     const store = createDefaultKnowledgeStore()
     const result = await applyKnowledgeChangeHandler(contextFor(store), {

@@ -232,7 +232,7 @@
               "importAssets": {
                 "type": "array",
                 "maxItems": 100,
-                "description": "Local images to copy into the knowledge package and append inline to body. Each copied image is also recorded as a file link. Supported: PNG, JPEG, GIF, WebP, SVG.",
+                "description": "Local images to copy into the knowledge package and append inline to body. Omit this field or use an empty array for text-only changes. Each copied image is also recorded as a file link. Supported: PNG, JPEG, GIF, WebP, SVG.",
                 "items": {
                   "type": "object",
                   "properties": {
