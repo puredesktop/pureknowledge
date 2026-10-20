@@ -146,7 +146,10 @@ Always read before you write. `getKnowledgeContext` is the entry point
 — then `searchKnowledge` for content: ranked results, or the space
 overview on an empty query, scoped with `space` when the base has
 several. `readKnowledgePage` fetches one page
-in full by id, slug, title, or alias, with its backlinks.
+in full by id, slug, title, or alias, with its backlinks. For a long
+page, ask for less: `section` (a heading) or `offset`/`maxChars`
+returns just that part, with the page's length, its headings and a
+`nextOffset` to continue.
 `getBacklinks` before any rename, merge, or delete. `listSpaces` for
 the space map, `listKnowledgeActivity` for what changed recently and by
 whom, `reviewKnowledge` for the curation sweep, and

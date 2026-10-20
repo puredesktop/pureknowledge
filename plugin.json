@@ -68,13 +68,27 @@
         {
           "name": "readKnowledgePage",
           "risk": "read",
-          "description": "Read one knowledge page in full by id, slug, title, or alias. getKnowledgeContext and searchKnowledge supply the references.",
+          "description": "Read one knowledge page in full by id, slug, title, or alias. getKnowledgeContext and searchKnowledge supply the references. For a long page, ask for less: section (a heading) or offset/maxChars returns just that part, with bodyCharacters, the page's headings (sections) and nextOffset to continue.",
           "requiresApproval": false,
           "inputSchema": {
             "type": "object",
             "properties": {
               "page": {
                 "type": "string"
+              },
+              "section": {
+                "type": "string",
+                "description": "Optional: a heading on the page. Returns only that heading and its content, up to the next heading of the same or higher level."
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Optional: start at this character of the body. Pass back nextOffset to continue."
+              },
+              "maxChars": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Optional: return at most this many characters of the body."
               }
             },
             "required": [

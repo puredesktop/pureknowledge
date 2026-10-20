@@ -12,6 +12,7 @@ import { importKnowledgeImages } from '../bridge/knowledgeAssets'
 import {
   applyKnowledgeChangeHandler,
   getKnowledgeContextHandler,
+  readKnowledgePageHandler,
   searchKnowledgeHandler,
 } from './handlers'
 import type { KnowledgeAgentToolContext } from './catalog'
@@ -277,5 +278,52 @@ describe('burst create then search (regression)', () => {
     // An empty-query search (the "list recent" branch) must also return.
     const recent = searchKnowledgeHandler(ctx, {})
     expect(() => JSON.parse(recent.content)).not.toThrow()
+  })
+})
+
+describe('readKnowledgePage (asking for less)', () => {
+  const sectionText = (n: number) => `## Part ${n}\n\n` + `Line about part ${n}. `.repeat(60) + '\n\n'
+  function longPage() {
+    let store = createDefaultKnowledgeStore()
+    store = createKnowledgePage(store, {
+      spaceId: store.activeSpaceId,
+      parentId: store.spaces[0]!.rootPageId,
+      kind: 'wiki',
+      title: 'Render pipeline',
+      body: '# Render pipeline\n\nIntro.\n\n' + [1, 2, 3, 4, 5, 6, 7, 8].map(sectionText).join(''),
+    })
+    return store
+  }
+  const read = (args: Record<string, unknown>) =>
+    JSON.parse(readKnowledgePageHandler(contextFor(longPage()), { page: 'Render pipeline', ...args }).content)
+
+  it('still returns the whole body by default', () => {
+    const page = read({})
+    expect(page.body).toContain('## Part 8')
+    expect(page).not.toHaveProperty('nextOffset')
+  })
+  it('returns one section by heading, with the outline and length', () => {
+    const full = read({})
+    const part = read({ section: 'Part 3' })
+    expect(part.body.startsWith('## Part 3')).toBe(true)
+    expect(part.body).not.toContain('## Part 4')
+    expect(part.bodyCharacters).toBe(full.body.length)
+    expect(part.sections.map((s: { heading: string }) => s.heading)).toContain('Part 7')
+    expect(part.nextOffset).toBeNull()
+    expect(JSON.stringify(part).length).toBeLessThan(JSON.stringify(full).length / 3)
+  })
+  it('pages through the body with offset and maxChars', () => {
+    const full = read({}).body as string
+    const first = read({ maxChars: 1000 })
+    expect(first.body).toBe(full.slice(0, 1000))
+    const second = read({ offset: first.nextOffset, maxChars: 1000 })
+    expect(second.body).toBe(full.slice(1000, 2000))
+    expect(read({ offset: full.length - 10 }).nextOffset).toBeNull()
+  })
+  it('names the headings when the section is missing, and refuses a bad range', () => {
+    const missing = readKnowledgePageHandler(contextFor(longPage()), { page: 'Render pipeline', section: 'Nope' })
+    expect(missing.content).toContain('Part 2')
+    const bad = readKnowledgePageHandler(contextFor(longPage()), { page: 'Render pipeline', maxChars: 0 })
+    expect(bad.content).toContain('maxChars')
   })
 })
