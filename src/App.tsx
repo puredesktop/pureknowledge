@@ -66,6 +66,7 @@ import {
 } from '@purescience/platform-ui/editor'
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useCallback,
   useMemo,
@@ -85,6 +86,7 @@ import {
   type PlatformOperationInput,
 } from './bridge/platformBridge'
 import { KNOWLEDGE_APP_SLUG } from './constants'
+import { linkKnowledgeRefs } from './lib/knowledgeRefs'
 import { useKnowledgeAgentTools } from './hooks/useKnowledgeAgentTools'
 import { useKnowledgeWorkspace } from './hooks/useKnowledgeWorkspace'
 import { usePureKnowledgeBoot } from './hooks/usePureKnowledgeBoot'
@@ -1381,29 +1383,146 @@ const StyledWikiBody = styled(ReadingSurface)`
     line-height: 0;
   }
 
-  /* A wide table stays inside the page column. The table itself becomes
-     the scroll box (no wrapper element, so the Markdown round-trip is
-     untouched); the rows inside still lay out as a table at the column's
-     width. Long ids and links in cells may break anywhere, which also
-     lowers the columns' minimum widths, so a typical table fits without
-     scrolling at all. Prose in cells keeps whole words. */
+  /* A table reads like a table: each cell's text starts at its top, every
+     column keeps a readable width (a long id breaks a dozen or so characters
+     a line, never every three), a long cell stops at a measure, and headers
+     stay on one line. A table wider than the page scrolls inside it, with
+     its scrollbar always showing, so nothing past the edge is hidden. The
+     table itself is the scroll box (no wrapper element, so the Markdown
+     round-trip is untouched). */
+  a.knowledge-ref {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  a.knowledge-ref code {
+    color: var(--pureknowledge-accent, var(--app-acc, currentColor));
+    cursor: pointer;
+  }
+
+  a.knowledge-ref:hover code {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  button.knowledge-table-open {
+    display: block;
+    margin: 0 0 6px auto;
+    padding: 3px 10px;
+    border: 1px solid var(--pure-chrome-line, rgba(127, 127, 127, 0.35));
+    border-radius: 999px;
+    background: transparent;
+    color: var(--pureknowledge-content-muted, inherit);
+    font: 500 12px/1.4 var(--platform-typography-font-family, system-ui);
+    cursor: pointer;
+  }
+
+  button.knowledge-table-open:hover {
+    color: var(--platform-colors-text, inherit);
+  }
+
+  /* Prose keeps its reading measure; a table takes the sheet's full width. */
+  &[data-chrome] {
+    max-width: none;
+  }
+
+  > :not(table) {
+    max-width: var(--pure-chrome-reading-measure);
+  }
+
   table {
     display: block;
     max-width: 100%;
+    width: max-content;
     overflow-x: auto;
     margin-top: 0;
     margin-bottom: var(--pureknowledge-space-lg);
+    font-size: 0.9em;
+    line-height: 1.45;
+    scrollbar-width: thin;
+    scrollbar-color: var(--pureknowledge-content-muted, rgba(127, 127, 127, 0.55)) transparent;
+  }
+
+  table::-webkit-scrollbar {
+    height: 8px;
+  }
+
+  table::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: var(--pureknowledge-content-muted, rgba(127, 127, 127, 0.55));
   }
 
   th,
   td {
+    min-width: 6rem;
+    max-width: 28rem;
+    padding: 0.45em 0.75em;
+    vertical-align: top;
+    text-align: left;
     overflow-wrap: break-word;
+  }
+
+  th {
+    white-space: nowrap;
+  }
+
+  th:first-child,
+  td:first-child {
+    min-width: 2.5rem;
   }
 
   :is(th, td) :is(code, a) {
     overflow-wrap: anywhere;
     -webkit-box-decoration-break: clone;
     box-decoration-break: clone;
+  }
+`
+
+/* A wide table, whole: the dialog's width, cells at a reading measure, scrolling only if it must. */
+const StyledTablePreview = styled.div`
+  &[data-chrome] {
+    max-width: none;
+  }
+
+  max-height: 75vh;
+  overflow: auto;
+
+  table {
+    border-collapse: collapse;
+    font-size: 0.9em;
+    line-height: 1.45;
+  }
+
+  th,
+  td {
+    min-width: 6rem;
+    max-width: 32rem;
+    padding: 0.45em 0.75em;
+    vertical-align: top;
+    text-align: left;
+    overflow-wrap: break-word;
+    border-bottom: 1px solid var(--pure-chrome-line, rgba(127, 127, 127, 0.25));
+  }
+
+  th {
+    position: sticky;
+    top: 0;
+    white-space: nowrap;
+    background: var(--glass-popover, var(--platform-colors-elevated, #1b1f22));
+  }
+
+  :is(th, td) :is(code, a) {
+    overflow-wrap: anywhere;
+  }
+
+  a.knowledge-ref {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  a.knowledge-ref code {
+    color: var(--pureknowledge-accent, var(--app-acc, currentColor));
+    cursor: pointer;
   }
 `
 
@@ -2402,7 +2521,7 @@ function KnowledgeWorkspace({
             if (!rootPage) return null
             return (
               <StyledTreeItem key={rootPage.id}>
-                <StyledPageRow $depth={0} $active={rootPage.id === activePage?.id}>
+                <StyledPageRow $depth={0} $active={rootPage.id === activePage?.id} {...agentRefs(rootPage)}>
                   <span aria-hidden="true" />
                   <StyledPageIcon>
                     <PlatformIcon icon={FileText} />
@@ -2429,6 +2548,7 @@ function KnowledgeWorkspace({
                   <StyledPageRow
                     $depth={depth}
                     $active={page.id === activePage?.id}
+                    {...agentRefs(page)}
                   >
                     {hasChildren ? (
                       <StyledTreeAction
@@ -2552,6 +2672,7 @@ function KnowledgeWorkspace({
                       <StyledPageRow
                         $depth={0}
                         $active={note.id === activePage?.id}
+                        {...agentRefs(note)}
                       >
                         <span aria-hidden="true" />
                         <StyledPageIcon>
@@ -3208,13 +3329,46 @@ function KnowledgePageEditor({
     [store.pages],
   )
   const renderedWikiHtml = useMemo(
-    () => editing ? '' : addKnowledgeGalleryControls(embedKnowledgeVideos(renderWikiLinkMarkdown(editorHtml))),
+    () => editing ? '' : linkKnowledgeRefs(addKnowledgeGalleryControls(embedKnowledgeVideos(renderWikiLinkMarkdown(editorHtml))), store.pages),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [editorHtml, editing, wikiTitleKey, page?.spaceId],
   )
   // The same object each render too: React rewrites innerHTML whenever this
   // prop object changes, even when the string inside is identical.
   const renderedWikiInnerHtml = useMemo(() => ({ __html: renderedWikiHtml }), [renderedWikiHtml])
+
+  // A table wider than the page gets an Open table button before it, which shows it whole in a dialog. Checked
+  // when the page is drawn and whenever the page's width changes.
+  const wikiBodyRef = useRef<HTMLDivElement>(null)
+  const [expandedTable, setExpandedTable] = useState<string | null>(null)
+  useLayoutEffect(() => {
+    const body = wikiBodyRef.current
+    if (!body) return
+    const mark = (): void => {
+      for (const table of Array.from(body.querySelectorAll<HTMLTableElement>(':scope > table'))) {
+        const button = table.previousElementSibling instanceof HTMLButtonElement && table.previousElementSibling.dataset.tableOpen !== undefined
+          ? table.previousElementSibling
+          : null
+        const wide = table.scrollWidth > table.clientWidth + 2
+        if (wide && !button) {
+          const open = document.createElement('button')
+          open.type = 'button'
+          open.dataset.tableOpen = ''
+          open.className = 'knowledge-table-open'
+          open.textContent = 'Open table'
+          open.title = 'This table is wider than the page: show it whole'
+          table.before(open)
+        } else if (!wide && button) {
+          button.remove()
+        }
+      }
+    }
+    mark()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(mark)
+    observer.observe(body)
+    return () => observer.disconnect()
+  }, [renderedWikiHtml])
 
   const openRenderedImage = (target: EventTarget | null): boolean => {
     const preview = readKnowledgeImagePreview(target)
@@ -3355,6 +3509,28 @@ function KnowledgePageEditor({
       return
     }
     if (!(target instanceof Element)) return
+    const tableOpen = target.closest<HTMLButtonElement>('button[data-table-open]')
+    if (tableOpen) {
+      event.preventDefault()
+      const table = tableOpen.nextElementSibling
+      if (table instanceof HTMLTableElement) setExpandedTable(table.outerHTML)
+      return
+    }
+    // Ids and paths in the page are links (lib/knowledgeRefs): a page opens here, a file in its app.
+    const pageRef = target.closest<HTMLAnchorElement>('a[data-knowledge-page]')
+    if (pageRef) {
+      event.preventDefault()
+      const id = pageRef.dataset.knowledgePage
+      if (id) onSelectPage(id)
+      return
+    }
+    const pathRef = target.closest<HTMLAnchorElement>('a[data-knowledge-path]')
+    if (pathRef) {
+      event.preventDefault()
+      const path = pathRef.dataset.knowledgePath
+      if (path) void catalogOpen({ path, name: path.split('/').filter(Boolean).pop() ?? path })
+      return
+    }
     const wikiLink = target.closest<HTMLAnchorElement>('a[data-wiki-title]')
     if (wikiLink) {
       event.preventDefault()
@@ -3391,6 +3567,8 @@ function KnowledgePageEditor({
 
     return (
       <StyledWikiBody
+        ref={wikiBodyRef}
+        {...(page ? agentRefs(page) : {})}
         onClick={handleRenderedWikiClick}
         onKeyDown={handleRenderedWikiKeyDown}
         dangerouslySetInnerHTML={renderedWikiInnerHtml}
@@ -3475,7 +3653,7 @@ function KnowledgePageEditor({
                   </Button>
                 </StyledWikiMeta>
                 <StyledWikiRule />
-                <StyledKnowledgeEditorFrame>
+                <StyledKnowledgeEditorFrame {...agentRefs(page)}>
                   <DocumentEditor
                     key={page.id}
                     ref={editorRef}
@@ -3776,6 +3954,25 @@ function KnowledgePageEditor({
         </StyledEditorBody>
       </StyledEditorPane>
       <Modal
+        open={expandedTable !== null}
+        onClose={() => setExpandedTable(null)}
+        title={page?.title ?? 'Table'}
+        size="xl"
+        closeOnEscape
+        closeOnBackdropClick
+      >
+        {expandedTable !== null ? (
+          <StyledTablePreview
+            data-chrome="reading"
+            onClick={event => {
+              handleRenderedWikiClick(event)
+              if (event.target instanceof Element && event.target.closest('a[data-knowledge-page], a[data-wiki-title]')) setExpandedTable(null)
+            }}
+            dangerouslySetInnerHTML={{ __html: expandedTable }}
+          />
+        ) : null}
+      </Modal>
+      <Modal
         open={Boolean(expandedImage)}
         onClose={() => setExpandedImage(null)}
         title={expandedImage?.alt || 'Image preview'}
@@ -3842,6 +4039,17 @@ function KnowledgePageEditor({
     if (activeSpace.rootPageId) {
       onSelectPage(activeSpace.rootPageId)
     }
+  }
+}
+
+/**
+ * How a page is named to the suite's activity layer: an agent's call that reads or changes this page (by id or by
+ * slug) is drawn on its row and on its body as it happens (AgentActivityLayer, in AppFrame).
+ */
+function agentRefs(page: Pick<KnowledgePage, 'id' | 'slug' | 'title'>): { 'data-agent-ref': string; 'data-agent-label': string } {
+  return {
+    'data-agent-ref': [page.id, page.slug, `page:${page.id}`, `page:${page.slug}`].filter(Boolean).join(' '),
+    'data-agent-label': page.title,
   }
 }
 
