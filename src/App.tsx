@@ -1380,6 +1380,31 @@ const StyledWikiBody = styled(ReadingSurface)`
     font-size: 0.72em;
     line-height: 0;
   }
+
+  /* A wide table stays inside the page column. The table itself becomes
+     the scroll box (no wrapper element, so the Markdown round-trip is
+     untouched); the rows inside still lay out as a table at the column's
+     width. Long ids and links in cells may break anywhere, which also
+     lowers the columns' minimum widths, so a typical table fits without
+     scrolling at all. Prose in cells keeps whole words. */
+  table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    margin-top: 0;
+    margin-bottom: var(--pureknowledge-space-lg);
+  }
+
+  th,
+  td {
+    overflow-wrap: break-word;
+  }
+
+  :is(th, td) :is(code, a) {
+    overflow-wrap: anywhere;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+  }
 `
 
 const StyledKnowledgeEditorFrame = styled.div`
@@ -1455,6 +1480,24 @@ const StyledKnowledgeEditorFrame = styled.div`
     font-size: var(--pureknowledge-font-size-body);
     line-height: var(--pureknowledge-line-height-content);
     color: var(--pureknowledge-content-text);
+  }
+
+  /* The editor's table fills the field at a fixed layout; a resized one
+     can grow wider, so its wrapper scrolls instead of being clipped by the
+     frame. Text in a cell wraps inside the cell rather than running under
+     its neighbour. */
+  .knowledge-page-editor .tableWrapper {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .knowledge-page-editor :is(th, td) {
+    overflow-wrap: anywhere;
+  }
+
+  .knowledge-page-editor :is(th, td) code {
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
   }
 
   .knowledge-page-editor [data-knowledge-gallery] {
