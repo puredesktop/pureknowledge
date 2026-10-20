@@ -91,8 +91,8 @@ function readImportAssetsArg(
 ): KnowledgeImageImport[] | { error: string } | undefined {
   const raw = args.importAssets
   if (raw === undefined) return undefined
-  if (!Array.isArray(raw) || raw.length === 0) {
-    return { error: '"importAssets" must be a non-empty array of local images.' }
+  if (!Array.isArray(raw)) {
+    return { error: '"importAssets" must be an array of local images; use [] for a text-only change.' }
   }
   if (raw.length > 100) {
     return { error: 'Import at most 100 images in one call.' }
