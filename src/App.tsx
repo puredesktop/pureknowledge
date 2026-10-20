@@ -3591,7 +3591,7 @@ function KnowledgePageEditor({
       <StyledEditorPane>
         <StyledEditorBody>
         <StyledMainEditor ref={dropSurface}>
-          <StyledWikiSurface>
+          <StyledWikiSurface data-agent-ref="@open" data-agent-label={pageDisplayTitle(page, activeSpace.rootPageId)}>
             <StyledWikiPageHeader>
               <StyledBreadcrumbLane>
                 <PathBreadcrumbs
