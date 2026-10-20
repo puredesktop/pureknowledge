@@ -223,6 +223,8 @@ export function readKnowledgePageHandler(
       `No page matching "${ref}". searchKnowledge finds pages by content.`,
     )
   }
+  const part = readPagePart(page.body, args)
+  if ('error' in part) return agentToolErrorContent(part.error)
   return {
     content: formatAgentToolJson({
       id: page.id,
@@ -237,8 +239,67 @@ export function readKnowledgePageHandler(
         id: source.id,
         title: source.title,
       })),
-      body: page.body,
+      ...part,
     }),
+  }
+}
+
+/** Markdown headings of a page body with their character offsets. */
+function pageHeadings(body: string) {
+  const headings: { heading: string; level: number; offset: number }[] = []
+  const pattern = /^(#{1,6})[ \t]+(.+?)[ \t#]*$/gm
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(body))) {
+    headings.push({ heading: match[2]!.trim(), level: match[1]!.length, offset: match.index })
+  }
+  return headings
+}
+
+/**
+ * The whole body by default (unchanged). With `section` (a heading) or
+ * `offset`/`maxChars`, only that part, plus the page's total length, its
+ * headings and the next offset (within the section, when one is named), so a
+ * long page can be read in pieces.
+ */
+function readPagePart(
+  body: string,
+  args: Record<string, unknown>,
+): { body: string } | { body: string; bodyCharacters: number; offset: number; nextOffset: number | null; sections: { heading: string; level: number; offset: number }[]; moreSections?: number; section?: string } | { error: string } {
+  const section = readAgentToolStringArg(args, 'section')?.trim()
+  const rawOffset = args.offset
+  const rawMax = args.maxChars
+  if (!section && rawOffset === undefined && rawMax === undefined) return { body }
+  if (rawOffset !== undefined && (typeof rawOffset !== 'number' || !Number.isInteger(rawOffset) || rawOffset < 0)) {
+    return { error: '"offset" must be a whole number of characters, 0 or more.' }
+  }
+  if (rawMax !== undefined && (typeof rawMax !== 'number' || !Number.isInteger(rawMax) || rawMax < 1)) {
+    return { error: '"maxChars" must be a whole number of characters, 1 or more.' }
+  }
+  const headings = pageHeadings(body)
+  let start = 0
+  let end = body.length
+  if (section) {
+    const lowered = section.replace(/^#+\s*/, '').toLowerCase()
+    const index = headings.findIndex(h => h.heading.toLowerCase() === lowered)
+    if (index < 0) {
+      return { error: `No heading "${section}" on this page. Headings: ${headings.map(h => h.heading).join(', ') || 'none'}.` }
+    }
+    const found = headings[index]!
+    start = found.offset
+    const next = headings.slice(index + 1).find(h => h.level <= found.level)
+    end = next ? next.offset : body.length
+  }
+  // offset is always a position in the whole body, so nextOffset can be passed straight back.
+  start = Math.min(end, Math.max(start, (rawOffset as number | undefined) ?? 0))
+  const stop = rawMax === undefined ? end : Math.min(end, start + (rawMax as number))
+  return {
+    body: body.slice(start, stop),
+    bodyCharacters: body.length,
+    offset: start,
+    nextOffset: stop < end ? stop : null,
+    sections: headings.slice(0, 50),
+    ...(headings.length > 50 ? { moreSections: headings.length - 50 } : {}),
+    ...(section ? { section } : {}),
   }
 }
 
