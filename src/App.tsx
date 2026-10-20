@@ -1482,10 +1482,12 @@ const StyledWikiBody = styled(ReadingSurface)`
 const StyledTablePreview = styled.div`
   &[data-chrome] {
     max-width: none;
+    min-width: 0;
+    width: 100%;
+    max-height: 75vh;
+    /* The dialog's body makes its only child scroll up and down only (overflow: hidden auto); a table needs both. */
+    overflow: auto !important;
   }
-
-  max-height: 75vh;
-  overflow: auto;
 
   table {
     border-collapse: collapse;
