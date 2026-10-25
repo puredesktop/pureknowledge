@@ -89,7 +89,7 @@ describe('applyKnowledgeChange ledger wiring', () => {
 
   it('accepts empty image lists for text-only creates and updates without importing files', async () => {
     let saved = createDefaultKnowledgeStore()
-    const context = { ...contextFor(saved), saveStore: async (next: typeof saved) => { saved = next } }
+    const context = { ...contextFor(saved), saveStore: async (update: typeof saved | ((current: typeof saved) => typeof saved)) => { saved = typeof update === 'function' ? update(saved) : update } }
     const created = await applyKnowledgeChangeHandler(context, {
       action: 'create', title: 'Career evidence', body: 'Supported facts.', summary: 'Save evidence.', importAssets: [],
     })
@@ -132,8 +132,8 @@ describe('applyKnowledgeChange ledger wiring', () => {
     let saved = createDefaultKnowledgeStore()
     const context = {
       ...contextFor(saved),
-      saveStore: async (next: typeof saved) => {
-        saved = next
+      saveStore: async (update: typeof saved | ((current: typeof saved) => typeof saved)) => {
+        saved = typeof update === 'function' ? update(saved) : update
       },
     }
     vi.mocked(importKnowledgeImages).mockResolvedValueOnce([
@@ -205,8 +205,8 @@ describe('applyKnowledgeChange ledger wiring', () => {
     })
     const context = {
       ...contextFor(saved),
-      saveStore: async (next: typeof saved) => {
-        saved = next
+      saveStore: async (update: typeof saved | ((current: typeof saved) => typeof saved)) => {
+        saved = typeof update === 'function' ? update(saved) : update
       },
     }
     vi.mocked(importKnowledgeImages).mockResolvedValueOnce([
@@ -229,6 +229,51 @@ describe('applyKnowledgeChange ledger wiring', () => {
     const page = saved.pages.find(candidate => candidate.title === 'Brand guide')
     expect(page?.body).toBe(
       'Keep this introduction.\n\n![Pure logo](assets/logo.svg)',
+    )
+  })
+
+  it('appends imported assets to the latest body after a concurrent edit', async () => {
+    let saved = createDefaultKnowledgeStore()
+    saved = createKnowledgePage(saved, {
+      spaceId: saved.activeSpaceId,
+      parentId: saved.spaces[0]!.rootPageId,
+      kind: 'wiki',
+      title: 'Brand guide',
+      body: 'Old body.',
+    })
+    const pageId = saved.pages[0]!.id
+    const context = {
+      ...contextFor(saved),
+      saveStore: async (update: typeof saved | ((current: typeof saved) => typeof saved)) => {
+        saved = typeof update === 'function' ? update(saved) : update
+      },
+    }
+    let resolveImages!: (assets: Awaited<ReturnType<typeof importKnowledgeImages>>) => void
+    const images = new Promise<Awaited<ReturnType<typeof importKnowledgeImages>>>(resolve => {
+      resolveImages = resolve
+    })
+    vi.mocked(importKnowledgeImages).mockReturnValueOnce(images)
+    const applying = applyKnowledgeChangeHandler(context, {
+      action: 'update',
+      page: pageId,
+      summary: 'Add the approved logo.',
+      importAssets: [{ sourcePath: '/Brand/logo.svg', alt: 'Pure logo' }],
+    })
+    await vi.waitFor(() => expect(importKnowledgeImages).toHaveBeenCalled())
+    saved = {
+      ...saved,
+      pages: saved.pages.map(page => page.id === pageId ? { ...page, body: 'New body.' } : page),
+    }
+    resolveImages([{
+      sourcePath: '/Brand/logo.svg',
+      relativePath: 'assets/logo.svg',
+      absolutePath: `${context.storePath}/assets/logo.svg`,
+      alt: 'Pure logo',
+      markdown: '![Pure logo](assets/logo.svg)',
+    }])
+    await applying
+    expect(saved.pages.find(page => page.id === pageId)?.body).toBe(
+      'New body.\n\n![Pure logo](assets/logo.svg)',
     )
   })
 })
@@ -273,7 +318,7 @@ describe('burst create then search (regression)', () => {
     ctx.saveStore = (next) => {
       // Commit synchronously the way the workspace does (setStore before the
       // write settles), then chain the "write" so overlapping calls queue.
-      ctx.store = next
+      ctx.store = typeof next === 'function' ? next(ctx.store!) : next
       ctx.saveChain = ctx.saveChain.then(
         () => new Promise<void>(resolve => setTimeout(resolve, 1)),
       )
@@ -354,5 +399,146 @@ describe('readKnowledgePage (asking for less)', () => {
     expect(missing.content).toContain('Part 2')
     const bad = readKnowledgePageHandler(contextFor(longPage()), { page: 'Render pipeline', maxChars: 0 })
     expect(bad.content).toContain('maxChars')
+  })
+
+  it('selects a heading whose name ends in a hash', () => {
+    let store = createDefaultKnowledgeStore()
+    store = createKnowledgePage(store, {
+      spaceId: store.activeSpaceId,
+      parentId: store.spaces[0]!.rootPageId,
+      kind: 'wiki',
+      title: 'Language notes',
+      body: '# C#\n\nLanguage details.\n\n# Next\n\nMore.',
+    })
+    const result = readKnowledgePageHandler(contextFor(store), {
+      page: 'Language notes',
+      section: 'C#',
+    })
+    const parsed = JSON.parse(result.content) as { body?: string; error?: string }
+    expect(parsed.error).toBeUndefined()
+    expect(parsed.body).toBe('# C#\n\nLanguage details.\n\n')
+  })
+})
+
+describe('applyKnowledgeChange safety', () => {
+  beforeEach(() => {
+    vi.mocked(recordOperation).mockClear()
+  })
+
+  it('refuses to merge a parent into its descendant', async () => {
+    let store = createDefaultKnowledgeStore()
+    store = createKnowledgePage(store, {
+      spaceId: store.activeSpaceId,
+      parentId: store.spaces[0]!.rootPageId,
+      kind: 'wiki',
+      title: 'Parent',
+    })
+    const parent = store.pages[0]!
+    store = createKnowledgePage(store, {
+      spaceId: store.activeSpaceId,
+      parentId: parent.id,
+      kind: 'wiki',
+      title: 'Child',
+    })
+    let saved = store
+    const result = await applyKnowledgeChangeHandler(
+      { ...contextFor(store), saveStore: async (update: typeof store | ((current: typeof store) => typeof store)) => { saved = typeof update === 'function' ? update(saved) : update } },
+      { action: 'merge', page: parent.id, into: 'Child', body: 'Merged.', summary: 'Merge duplicates.' },
+    )
+    expect(result.content).toContain('descendant')
+    expect(saved).toBe(store)
+    expect(saved.pages.some(page => page.title === 'Child')).toBe(true)
+    expect(recordOperation).not.toHaveBeenCalled()
+  })
+
+  it('refuses to file a page under a parent from another space', async () => {
+    let store = createDefaultKnowledgeStore()
+    store = createKnowledgePage(store, {
+      spaceId: store.activeSpaceId,
+      parentId: store.spaces[0]!.rootPageId,
+      kind: 'wiki',
+      title: 'Local page',
+    })
+    const local = store.pages[0]!
+    const originalRoot = store.spaces[0]!
+    const otherRoot = { ...store.pages.find(page => page.id === originalRoot.rootPageId)!, id: 'page-other-root', spaceId: 'space-other' }
+    store = {
+      ...store,
+      spaces: [...store.spaces, { ...originalRoot, id: 'space-other', name: 'Other', rootPageId: otherRoot.id }],
+      pages: [otherRoot, ...store.pages],
+    }
+    let saved = store
+    const result = await applyKnowledgeChangeHandler(
+      { ...contextFor(store), saveStore: async (update: typeof store | ((current: typeof store) => typeof store)) => { saved = typeof update === 'function' ? update(saved) : update } },
+      { action: 'update', page: local.id, parent: otherRoot.id, body: 'Updated.', summary: 'Refile page.' },
+    )
+    expect(result.content).toContain('another space')
+    expect(saved).toBe(store)
+    expect(saved.pages.find(page => page.id === local.id)?.parentId).toBe(originalRoot.rootPageId)
+    expect(recordOperation).not.toHaveBeenCalled()
+  })
+
+  it('does not report deleting a protected space root as applied', async () => {
+    const store = createDefaultKnowledgeStore()
+    let saved = store
+    const result = await applyKnowledgeChangeHandler(
+      { ...contextFor(store), saveStore: async (update: typeof store | ((current: typeof store) => typeof store)) => { saved = typeof update === 'function' ? update(saved) : update } },
+      { action: 'delete', page: store.spaces[0]!.rootPageId!, summary: 'Remove root.' },
+    )
+    expect(result.content).toContain('root')
+    expect(result.content).not.toContain('"status":"applied"')
+    expect(saved).toBe(store)
+    expect(recordOperation).not.toHaveBeenCalled()
+  })
+
+  it('does not demote a space root to a note', async () => {
+    const store = createDefaultKnowledgeStore()
+    let saved = store
+    const result = await applyKnowledgeChangeHandler(
+      { ...contextFor(store), saveStore: async (update: typeof store | ((current: typeof store) => typeof store)) => { saved = typeof update === 'function' ? update(saved) : update } },
+      { action: 'update', page: store.spaces[0]!.rootPageId!, kind: 'note', body: 'Informal.', summary: 'Demote root.' },
+    )
+    expect(result.content).toContain('root')
+    expect(saved.pages[0]!.kind).toBe('wiki')
+    expect(saved).toBe(store)
+    expect(recordOperation).not.toHaveBeenCalled()
+  })
+
+  it('clears tags when an empty tag list is supplied', async () => {
+    let store = createDefaultKnowledgeStore()
+    let saved = store
+    const result = await applyKnowledgeChangeHandler(
+      { ...contextFor(store), saveStore: async (update: typeof store | ((current: typeof store) => typeof store)) => { saved = typeof update === 'function' ? update(saved) : update } },
+      { action: 'update', page: store.pages[0]!.id, body: store.pages[0]!.body, tags: '', summary: 'Clear old tags.' },
+    )
+    expect(result.content).toContain('applied')
+    expect(saved.pages[0]!.tags).toEqual([])
+  })
+
+  it('accepts tags as a string array', async () => {
+    const store = createDefaultKnowledgeStore()
+    let saved = store
+    const result = await applyKnowledgeChangeHandler(
+      { ...contextFor(store), saveStore: async (update: typeof store | ((current: typeof store) => typeof store)) => { saved = typeof update === 'function' ? update(saved) : update } },
+      { action: 'update', page: store.pages[0]!.id, body: store.pages[0]!.body, tags: [' alpha ', 'beta', ''], summary: 'Update tags.' },
+    )
+    expect(result.content).toContain('applied')
+    expect(saved.pages[0]!.tags).toEqual(['alpha', 'beta'])
+  })
+
+  it('refuses an ambiguous title instead of reading an arbitrary page', () => {
+    let store = createDefaultKnowledgeStore()
+    for (const body of ['First.', 'Second.']) {
+      store = createKnowledgePage(store, {
+        spaceId: store.activeSpaceId,
+        parentId: store.spaces[0]!.rootPageId,
+        kind: 'wiki',
+        title: 'Duplicate',
+        body,
+      })
+    }
+    const result = readKnowledgePageHandler(contextFor(store), { page: 'Duplicate' })
+    expect(result.content).toContain('multiple pages')
+    expect(result.content).toContain('page id')
   })
 })

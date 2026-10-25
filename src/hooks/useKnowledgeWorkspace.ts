@@ -53,6 +53,10 @@ import {
 } from '../lib/knowledgePages'
 import { KNOWLEDGE_APP_SLUG } from '../constants'
 
+export type KnowledgeStoreUpdate =
+  | KnowledgeStore
+  | ((current: KnowledgeStore) => KnowledgeStore)
+
 interface UseKnowledgeWorkspaceResult {
   store: KnowledgeStore | null
   storePath: string
@@ -60,7 +64,7 @@ interface UseKnowledgeWorkspaceResult {
   saving: boolean
   error: Error | null
   saveFailed: boolean
-  saveStore: (nextStore: KnowledgeStore) => Promise<void>
+  saveStore: (nextStore: KnowledgeStoreUpdate) => Promise<void>
   /** One-line notice after an out-of-process change was picked up. */
   externalNotice: string | null
 }
@@ -258,7 +262,8 @@ export function useKnowledgeWorkspace(
   const handledRef = useRef(onResourceHandled)
   handledRef.current = onResourceHandled
   const saveChainRef = useRef<Promise<void>>(Promise.resolve())
-  const importedPathsRef = useRef<Set<string>>(new Set())
+  const saveFailedRef = useRef(saveFailed)
+  saveFailedRef.current = saveFailed
 
   // Capture the import intent before the viewport resource is cleared.
   useEffect(() => {
@@ -377,6 +382,7 @@ export function useKnowledgeWorkspace(
       workspace.durable = incoming
       workspace.local = merged?.store ?? incoming
       setStore(workspace.local)
+      if (!saveFailedRef.current) setError(null)
       setExternalNotice(
         merged
           ? describeExternalReload(merged) ??
@@ -416,9 +422,11 @@ export function useKnowledgeWorkspace(
   }, [loading, packagePath, reloadFromDisk])
 
   const saveStore = useCallback(
-    async (nextStore: KnowledgeStore) => {
+    async (update: KnowledgeStoreUpdate) => {
       if (workspaceRef.current !== workspace || !workspace.local)
         throw new Error('The knowledge workspace is not ready to save.')
+      const nextStore =
+        typeof update === 'function' ? update(workspace.local) : update
       workspace.local = nextStore
       ++workspace.revision
       ++workspace.pending
@@ -464,9 +472,6 @@ export function useKnowledgeWorkspace(
   // touched — the file was input, never a knowledge base.
   useEffect(() => {
     if (!pendingImport || loading || !workspace.local) return
-    const importKey = `${packagePath}:${pendingImport}`
-    if (importedPathsRef.current.has(importKey)) return
-    importedPathsRef.current.add(importKey)
     const importPath = pendingImport
     setPendingImport(null)
     void (async () => {
@@ -501,7 +506,6 @@ export function useKnowledgeWorkspace(
           refs: { path: importPath },
         }).catch(() => undefined)
       } catch (importError) {
-        importedPathsRef.current.delete(importKey)
         if (workspaceRef.current !== workspace) return
         setError(
           importError instanceof Error

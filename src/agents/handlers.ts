@@ -37,15 +37,27 @@ function requireStore(
 function pageByRef(
   store: KnowledgeStore,
   ref: string,
-): KnowledgePage | undefined {
-  const lowered = ref.trim().toLowerCase()
-  return store.pages.find(
+): KnowledgePage | { error: string } | undefined {
+  const trimmed = ref.trim()
+  const byId = store.pages.find(page => page.id === trimmed)
+  if (byId) return byId
+  const lowered = trimmed.toLowerCase()
+  const exact = store.pages.filter(
     page =>
-      page.id === ref ||
-      page.slug.toLowerCase() === lowered ||
       page.title.toLowerCase() === lowered ||
       (page.aliases ?? []).some(alias => alias.toLowerCase() === lowered),
   )
+  const candidates = exact.length
+    ? exact
+    : store.pages.filter(page => page.slug.toLowerCase() === lowered)
+  const active = candidates.filter(page => page.spaceId === store.activeSpaceId)
+  const matches = active.length ? active : candidates
+  if (matches.length > 1) {
+    return {
+      error: `"${ref}" matches multiple pages (${matches.map(page => `${page.title}: ${page.id}`).join(', ')}). Use its page id.`,
+    }
+  }
+  return matches[0]
 }
 
 function spaceByRef(
@@ -218,6 +230,7 @@ export function readKnowledgePageHandler(
     )
   }
   const page = pageByRef(store, ref)
+  if (page && 'error' in page) return agentToolErrorContent(page.error)
   if (!page) {
     return agentToolErrorContent(
       `No page matching "${ref}". searchKnowledge finds pages by content.`,
@@ -247,10 +260,21 @@ export function readKnowledgePageHandler(
 /** Markdown headings of a page body with their character offsets. */
 function pageHeadings(body: string) {
   const headings: { heading: string; level: number; offset: number }[] = []
-  const pattern = /^(#{1,6})[ \t]+(.+?)[ \t#]*$/gm
-  let match: RegExpExecArray | null
-  while ((match = pattern.exec(body))) {
-    headings.push({ heading: match[2]!.trim(), level: match[1]!.length, offset: match.index })
+  let offset = 0
+  let fence: '`' | '~' | null = null
+  for (const rawLine of body.split('\n')) {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+    const fenceMatch = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(line)
+    if (fenceMatch) {
+      const marker = fenceMatch[1]![0] as '`' | '~'
+      fence = fence === marker ? null : fence ?? marker
+    } else if (!fence) {
+      const match = /^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/.exec(line)
+      if (match) {
+        headings.push({ heading: match[2]!.trim(), level: match[1]!.length, offset })
+      }
+    }
+    offset += rawLine.length + 1
   }
   return headings
 }
@@ -334,6 +358,7 @@ export function getBacklinksHandler(
     )
   }
   const page = pageByRef(store, ref)
+  if (page && 'error' in page) return agentToolErrorContent(page.error)
   if (!page) {
     return agentToolErrorContent(`No page matching "${ref}".`)
   }
@@ -362,6 +387,7 @@ export function listKnowledgeActivityHandler(
   if ('error' in store) return agentToolErrorContent(store.error)
   const ref = readAgentToolStringArg(args, 'page')
   const page = ref ? pageByRef(store, ref) : undefined
+  if (page && 'error' in page) return agentToolErrorContent(page.error)
   if (ref && !page) {
     return agentToolErrorContent(`No page matching "${ref}".`)
   }
@@ -437,6 +463,7 @@ export async function applyKnowledgeChangeHandler(
 
   const pageRef = readAgentToolStringArg(args, 'page')
   const existing = pageRef ? pageByRef(store, pageRef) : undefined
+  if (existing && 'error' in existing) return agentToolErrorContent(existing.error)
   if (pageRef && !existing) {
     return agentToolErrorContent(
       `No page matching "${pageRef}". searchKnowledge lists pages.`,
@@ -459,6 +486,14 @@ export async function applyKnowledgeChangeHandler(
   if (action !== 'create' && !existing) {
     return agentToolErrorContent(
       `action "${action}" needs "page" naming an existing page.`,
+    )
+  }
+  const existingIsRoot = existing
+    ? store.spaces.some(space => space.rootPageId === existing.id)
+    : false
+  if (existingIsRoot && (action === 'delete' || action === 'merge')) {
+    return agentToolErrorContent(
+      `"${existing?.title}" is a space root and cannot be deleted or merged away.`,
     )
   }
 
@@ -494,9 +529,10 @@ export async function applyKnowledgeChangeHandler(
   }
 
   const intoRef = readAgentToolStringArg(args, 'into')
-  const mergeInto = intoRef ? pageByRef(store, intoRef) : undefined
+  const resolvedMergeInto = intoRef ? pageByRef(store, intoRef) : undefined
   if (action === 'merge') {
-    if (!mergeInto) {
+    if (resolvedMergeInto && 'error' in resolvedMergeInto) return agentToolErrorContent(resolvedMergeInto.error)
+    if (!resolvedMergeInto) {
       return agentToolErrorContent(
         'action "merge" needs "into": the surviving page, and "body": its merged content.',
       )
@@ -506,16 +542,29 @@ export async function applyKnowledgeChangeHandler(
         'action "merge" needs "body": the surviving page\'s merged content.',
       )
     }
-    if (mergeInto.id === existing?.id) {
+    if (resolvedMergeInto.id === existing?.id) {
       return agentToolErrorContent('A page cannot merge into itself.')
     }
+    if (existing && wouldCreateParentCycle(store, existing.id, resolvedMergeInto.id)) {
+      return agentToolErrorContent(
+        'A page cannot merge into its own descendant because that would delete the surviving page.',
+      )
+    }
   }
+  const mergeInto: KnowledgePage | undefined =
+    resolvedMergeInto && !('error' in resolvedMergeInto) ? resolvedMergeInto : undefined
 
   const parentRef = readAgentToolStringArg(args, 'parent')
   const parent = parentRef ? pageByRef(store, parentRef) : undefined
+  if (parent && 'error' in parent) return agentToolErrorContent(parent.error)
   if (parentRef && !parent) {
     return agentToolErrorContent(
       `No page matching "${parentRef}" to file this under. searchKnowledge lists pages.`,
+    )
+  }
+  if (existing && parent && parent.spaceId !== existing.spaceId) {
+    return agentToolErrorContent(
+      `"${existing.title}" cannot be filed under a page from another space.`,
     )
   }
   if (existing && parent && wouldCreateParentCycle(store, existing.id, parent.id)) {
@@ -526,6 +575,11 @@ export async function applyKnowledgeChangeHandler(
   const kindArg = readAgentToolStringArg(args, 'kind')
   if (kindArg && kindArg !== 'wiki' && kindArg !== 'note') {
     return agentToolErrorContent('kind must be "wiki" or "note".')
+  }
+  if (existingIsRoot && kindArg === 'note') {
+    return agentToolErrorContent(
+      `"${existing?.title}" is a space root and must remain a wiki page.`,
+    )
   }
   // Duplicate guard: creating a page whose title an existing page already
   // carries is how a knowledge base rots — update that page instead.
@@ -539,10 +593,14 @@ export async function applyKnowledgeChangeHandler(
       )
     }
   }
-  const tags = readAgentToolStringArg(args, 'tags')
-    ?.split(',')
-    .map(tag => tag.trim())
-    .filter(Boolean)
+  const tags = typeof args.tags === 'string'
+    ? args.tags.split(',').map(tag => tag.trim()).filter(Boolean)
+    : Array.isArray(args.tags)
+      ? args.tags
+          .filter((tag): tag is string => typeof tag === 'string')
+          .map(tag => tag.trim())
+          .filter(Boolean)
+      : undefined
   const links = readLinksArg(args)
   if (importAssets?.length && action !== 'create' && action !== 'update') {
     return agentToolErrorContent(
@@ -561,10 +619,6 @@ export async function applyKnowledgeChangeHandler(
   }
   const importedMarkdown = importedAssets
     .map(asset => asset.markdown)
-    .join('\n\n')
-  const baseBody = body?.trim() ?? (action === 'update' ? existing?.body : '')
-  const effectiveBody = [baseBody, importedMarkdown]
-    .filter(Boolean)
     .join('\n\n')
   const effectiveLinks: Partial<KnowledgeLink>[] = [
     ...(links ?? []),
@@ -586,35 +640,63 @@ export async function applyKnowledgeChangeHandler(
   const agentName =
     readAgentToolStringArg(args, 'agentName')?.trim() || 'Assistant'
 
-  const before =
-    action === 'merge' ? mergeInto?.body : existing?.body
-  const after =
-    action === 'delete'
-      ? ''
-      : action === 'rename' || action === 'promote'
-        ? existing?.body
-        : effectiveBody || undefined
-
-  const next = applyKnowledgeAgentChange(store, {
-    spaceId: parent?.spaceId ?? spaceId,
-    ...(existing ? { pageId: existing.id } : {}),
-    agentName,
-    changeType,
-    title,
-    summary: summary.trim(),
-    ...(before !== undefined ? { before } : {}),
-    ...(after !== undefined ? { after } : {}),
-    patch: {
-      title,
-      ...(effectiveBody ? { body: effectiveBody } : {}),
-      ...(tags?.length ? { tags } : {}),
-      ...(parent ? { parentId: parent.id } : {}),
-      ...(kindArg ? { kind: kindArg as 'wiki' | 'note' } : {}),
-      ...(effectiveLinks.length ? { links: effectiveLinks } : {}),
-      ...(mergeInto ? { mergeIntoPageId: mergeInto.id } : {}),
-    },
-  })
-  await context.saveStore(next)
+  try {
+    await context.saveStore(current => {
+      const currentExisting = existing
+        ? current.pages.find(page => page.id === existing.id)
+        : undefined
+      if (existing && !currentExisting) {
+        throw new Error(`"${existing.title}" was removed before this change could be applied; find its replacement and retry.`)
+      }
+      if (action === 'create') {
+        const collision = current.pages.find(
+          page => page.title.toLowerCase() === title.toLowerCase(),
+        )
+        if (collision) throw new Error(`A page titled "${collision.title}" already exists; update it instead.`)
+      }
+      const currentMergeInto = mergeInto
+        ? current.pages.find(page => page.id === mergeInto.id)
+        : undefined
+      if (mergeInto && !currentMergeInto) {
+        throw new Error(`The merge destination "${mergeInto.title}" no longer exists; choose a surviving page and retry.`)
+      }
+      const currentParent = parent
+        ? current.pages.find(page => page.id === parent.id)
+        : undefined
+      if (parent && !currentParent) {
+        throw new Error(`The parent page "${parent.title}" no longer exists; choose a parent and retry.`)
+      }
+      const baseBody = body?.trim() ?? (action === 'update' ? currentExisting?.body : '')
+      const effectiveBody = [baseBody, importedMarkdown].filter(Boolean).join('\n\n')
+      const before = action === 'merge' ? currentMergeInto?.body : currentExisting?.body
+      const after = action === 'delete'
+        ? ''
+        : action === 'rename' || action === 'promote'
+          ? currentExisting?.body
+          : effectiveBody || undefined
+      return applyKnowledgeAgentChange(current, {
+        spaceId: currentParent?.spaceId ?? spaceId,
+        ...(currentExisting ? { pageId: currentExisting.id } : {}),
+        agentName,
+        changeType,
+        title: !titleArg && currentExisting ? currentExisting.title : title,
+        summary: summary.trim(),
+        ...(before !== undefined ? { before } : {}),
+        ...(after !== undefined ? { after } : {}),
+        patch: {
+          ...(action === 'create' || action === 'rename' || titleArg ? { title } : {}),
+          ...(effectiveBody ? { body: effectiveBody } : {}),
+          ...(tags !== undefined ? { tags } : {}),
+          ...(currentParent ? { parentId: currentParent.id } : {}),
+          ...(kindArg ? { kind: kindArg as 'wiki' | 'note' } : {}),
+          ...(effectiveLinks.length ? { links: effectiveLinks } : {}),
+          ...(currentMergeInto ? { mergeIntoPageId: currentMergeInto.id } : {}),
+        },
+      })
+    })
+  } catch (error) {
+    return agentToolErrorContent(error instanceof Error ? error.message : String(error))
+  }
   void recordOperation({
     lane: 'agent',
     kind: `knowledge.${changeType}`,

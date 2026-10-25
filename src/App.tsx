@@ -88,7 +88,10 @@ import {
 import { KNOWLEDGE_APP_SLUG } from './constants'
 import { linkKnowledgeRefs } from './lib/knowledgeRefs'
 import { useKnowledgeAgentTools } from './hooks/useKnowledgeAgentTools'
-import { useKnowledgeWorkspace } from './hooks/useKnowledgeWorkspace'
+import {
+  useKnowledgeWorkspace,
+  type KnowledgeStoreUpdate,
+} from './hooks/useKnowledgeWorkspace'
 import { usePureKnowledgeBoot } from './hooks/usePureKnowledgeBoot'
 import {
   acceptKnowledgeAgentChange,
@@ -2124,8 +2127,8 @@ function KnowledgeWorkspace({
   )
 
   const mutate = useCallback(
-    (nextStore: KnowledgeStore): void => {
-      void saveStore(nextStore).catch(() => undefined)
+    (update: KnowledgeStoreUpdate): void => {
+      void saveStore(update).catch(() => undefined)
     },
     [saveStore],
   )
@@ -2134,11 +2137,13 @@ function KnowledgeWorkspace({
     (pageId: string): void => {
       if (!store) return
       const pageById = new Map(store.pages.map(page => [page.id, page]))
+      const selectedPage = pageById.get(pageId)
+      if (!selectedPage) return
       setExpandedPageIds(current => {
         const next = new Set(current)
         // Guarded like findPagePath: a parent chain that loops (a root
         // filed under itself, say) must not spin here.
-        let parentId = pageById.get(pageId)?.parentId ?? null
+        let parentId = selectedPage.parentId
         while (parentId && !next.has(parentId)) {
           next.add(parentId)
           parentId = pageById.get(parentId)?.parentId ?? null
@@ -2146,7 +2151,15 @@ function KnowledgeWorkspace({
         return next
       })
       setActiveView('wiki')
-      mutate({ ...store, activePageId: pageId })
+      mutate(current => {
+        const selected = current.pages.find(page => page.id === pageId)
+        if (!selected) return current
+        return {
+          ...current,
+          activeSpaceId: selected.spaceId,
+          activePageId: pageId,
+        }
+      })
     },
     [mutate, store],
   )
@@ -2166,20 +2179,22 @@ function KnowledgeWorkspace({
   }
 
   const selectSpace = (spaceId: string): void => {
-    const space = store.spaces.find(candidate => candidate.id === spaceId)
-    const firstPage =
-      (space?.rootPageId
-        ? store.pages.find(page => page.id === space.rootPageId)
-        : null) ??
-      store.pages.find(
-        page => page.spaceId === spaceId && page.kind === 'wiki',
-      ) ??
-      store.pages.find(page => page.spaceId === spaceId) ??
-      null
-    mutate({
-      ...store,
-      activeSpaceId: spaceId,
-      activePageId: firstPage?.id ?? null,
+    mutate(current => {
+      const space = current.spaces.find(candidate => candidate.id === spaceId)
+      const firstPage =
+        (space?.rootPageId
+          ? current.pages.find(page => page.id === space.rootPageId)
+          : null) ??
+        current.pages.find(
+          page => page.spaceId === spaceId && page.kind === 'wiki',
+        ) ??
+        current.pages.find(page => page.spaceId === spaceId) ??
+        null
+      return {
+        ...current,
+        activeSpaceId: spaceId,
+        activePageId: firstPage?.id ?? null,
+      }
     })
   }
 
@@ -2197,9 +2212,7 @@ function KnowledgeWorkspace({
 
   const createSpace = (name: string): void => {
     if (!name.trim()) return
-    mutate(
-      createKnowledgeSpace(store, { name }, { actor: HUMAN_ACTIVITY_ACTOR }),
-    )
+    mutate(current => createKnowledgeSpace(current, { name }, { actor: HUMAN_ACTIVITY_ACTOR }))
     recordUserOperation('space.create', `Created space "${name.trim()}"`)
   }
 
@@ -2207,22 +2220,20 @@ function KnowledgeWorkspace({
     event.preventDefault()
     if (!newRootTitle.trim() || !newRootComposer) return
     const isDirectory = newRootComposer === 'directory'
-    mutate(
-      createKnowledgePage(
-        store,
-        {
-          spaceId: activeSpace.id,
-          kind: 'wiki',
-          parentId: activeSpace.rootPageId,
-          title: newRootTitle,
-          body: isDirectory
-            ? createDirectoryIndexBody(newRootTitle)
-            : undefined,
-          tags: isDirectory ? ['directory'] : [],
-        },
-        { actor: HUMAN_ACTIVITY_ACTOR },
-      ),
-    )
+    mutate(current => createKnowledgePage(
+      current,
+      {
+        spaceId: activeSpace.id,
+        kind: 'wiki',
+        parentId: activeSpace.rootPageId,
+        title: newRootTitle,
+        body: isDirectory
+          ? createDirectoryIndexBody(newRootTitle)
+          : undefined,
+        tags: isDirectory ? ['directory'] : [],
+      },
+      { actor: HUMAN_ACTIVITY_ACTOR },
+    ))
     recordUserOperation(
       'page.create',
       `Created ${isDirectory ? 'directory' : 'page'} "${newRootTitle.trim()}" in ${activeSpace.name}`,
@@ -2249,22 +2260,20 @@ function KnowledgeWorkspace({
     event.preventDefault()
     if (!newChildTitle.trim()) return
     const isDirectory = newChildKind === 'directory'
-    mutate(
-      createKnowledgePage(
-        store,
-        {
-          spaceId: activeSpace.id,
-          kind: 'wiki',
-          parentId,
-          title: newChildTitle,
-          body: isDirectory
-            ? createDirectoryIndexBody(newChildTitle)
-            : undefined,
-          tags: isDirectory ? ['directory'] : [],
-        },
-        { actor: HUMAN_ACTIVITY_ACTOR },
-      ),
-    )
+    mutate(current => createKnowledgePage(
+      current,
+      {
+        spaceId: activeSpace.id,
+        kind: 'wiki',
+        parentId,
+        title: newChildTitle,
+        body: isDirectory
+          ? createDirectoryIndexBody(newChildTitle)
+          : undefined,
+        tags: isDirectory ? ['directory'] : [],
+      },
+      { actor: HUMAN_ACTIVITY_ACTOR },
+    ))
     recordUserOperation(
       'page.create',
       `Created ${isDirectory ? 'directory' : 'page'} "${newChildTitle.trim()}"`,
@@ -2279,7 +2288,15 @@ function KnowledgeWorkspace({
   }
 
   const editTreePage = (pageId: string): void => {
-    mutate({ ...store, activePageId: pageId })
+    mutate(current => {
+      const selected = current.pages.find(page => page.id === pageId)
+      if (!selected) return current
+      return {
+        ...current,
+        activeSpaceId: selected.spaceId,
+        activePageId: pageId,
+      }
+    })
     setEditRequest({ pageId, nonce: Date.now() })
   }
 
@@ -2292,11 +2309,9 @@ function KnowledgeWorkspace({
 
   const confirmDeletePage = (): void => {
     if (!deleteCandidate) return
-    mutate(
-      deleteKnowledgePage(store, deleteCandidate.id, {
-        actor: HUMAN_ACTIVITY_ACTOR,
-      }),
-    )
+    mutate(current => deleteKnowledgePage(current, deleteCandidate.id, {
+      actor: HUMAN_ACTIVITY_ACTOR,
+    }))
     recordUserOperation(
       'page.delete',
       `Deleted page "${deleteCandidate.title}"`,
@@ -2308,7 +2323,7 @@ function KnowledgeWorkspace({
     const change = spaceAgentChanges.find(
       candidate => candidate.id === changeId,
     )
-    mutate(acceptKnowledgeAgentChange(store, changeId))
+    mutate(current => acceptKnowledgeAgentChange(current, changeId))
     recordUserOperation(
       'agentChange.accept',
       `Accepted agent proposal${change ? `: ${change.title}` : ''}`,
@@ -2319,7 +2334,7 @@ function KnowledgeWorkspace({
     const change = spaceAgentChanges.find(
       candidate => candidate.id === changeId,
     )
-    mutate(rejectKnowledgeAgentChange(store, changeId))
+    mutate(current => rejectKnowledgeAgentChange(current, changeId))
     recordUserOperation(
       'agentChange.reject',
       `Rejected agent proposal${change ? `: ${change.title}` : ''}`,
@@ -2328,20 +2343,23 @@ function KnowledgeWorkspace({
 
   const editAgentChange = (change: KnowledgeAgentChange): void => {
     if (change.pageId) {
+      const pageId = change.pageId
       setActiveView('wiki')
-      mutate({ ...store, activePageId: change.pageId })
-      setEditRequest({ pageId: change.pageId, nonce: Date.now() })
+      mutate(current => {
+        const selected = current.pages.find(page => page.id === pageId)
+        if (!selected) return current
+        return { ...current, activeSpaceId: selected.spaceId, activePageId: pageId }
+      })
+      setEditRequest({ pageId, nonce: Date.now() })
     }
   }
 
   const approveAllAgentChanges = (): void => {
     if (!pendingAgentChanges.length) return
-    mutate(
-      pendingAgentChanges.reduce(
-        (nextStore, change) => acceptKnowledgeAgentChange(nextStore, change.id),
-        store,
-      ),
-    )
+    mutate(current => pendingAgentChanges.reduce(
+      (nextStore, change) => acceptKnowledgeAgentChange(nextStore, change.id),
+      current,
+    ))
     recordUserOperation(
       'agentChange.acceptAll',
       `Accepted ${pendingAgentChanges.length} pending agent proposal${
@@ -2915,7 +2933,26 @@ function KnowledgeAgentReview({
   )
 }
 
-function KnowledgePageEditor({
+function recordKnowledgeEditSession(
+  baseline: { title: string; body: string; tags: string } | null,
+  titleDraft: string,
+  bodyDraft: string,
+  tagsDraft: string,
+): void {
+  if (!baseline) return
+  const nextTitle = titleDraft.trim() || baseline.title
+  if (nextTitle !== baseline.title) {
+    recordUserOperation(
+      'page.rename',
+      `Renamed page "${baseline.title}" to "${nextTitle}"`,
+    )
+  }
+  if (bodyDraft !== baseline.body || tagsDraft !== baseline.tags) {
+    recordUserOperation('page.update', `Edited page "${nextTitle}"`)
+  }
+}
+
+export function KnowledgePageEditor({
   packagePath,
   store,
   activeSpace,
@@ -2931,7 +2968,7 @@ function KnowledgePageEditor({
   page: KnowledgePage | null
   saving: boolean
   onSelectPage: (pageId: string) => void
-  onSave: (store: KnowledgeStore) => void
+  onSave: (update: KnowledgeStoreUpdate) => void
   editRequest: { pageId: string; nonce: number } | null
 }): React.ReactElement {
   const [titleDraft, setTitleDraft] = useState('')
@@ -2995,19 +3032,24 @@ function KnowledgePageEditor({
   // If this frame cannot show the shell's file URLs, go back to inlining.
   const urlImagesUnavailable = useRef(false)
   useEffect(() => {
-    if (urlImagesUnavailable.current || !editorHtml.includes('src="purescience-fs://')) return
+    if (editing || urlImagesUnavailable.current || !editorHtml.includes('src="purescience-fs://')) return
     const first = /src="(purescience-fs:\/\/[^"]+)"/.exec(editorHtml)?.[1]
     if (!first) return
+    let live = true
     const probe = new Image()
     probe.onerror = () => {
       urlImagesUnavailable.current = true
-      void prepareKnowledgeDocumentHtml(bodyDraft, packagePath, readPlatformFileBinary).then(result =>
-        setPreparedBody({ pageId: page?.id ?? '', ...result }),
-      )
+      void prepareKnowledgeDocumentHtml(bodyDraft, packagePath, readPlatformFileBinary).then(result => {
+        if (live) setPreparedBody({ pageId: page?.id ?? '', ...result })
+      })
     }
     probe.src = first
+    return () => {
+      live = false
+      probe.onerror = null
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editorHtml])
+  }, [editorHtml, editing])
   const dropError = useKnowledgeDrop({ pageId: page?.id, packagePath, editing, surface: dropSurface, editor: editorRef,
     insert: (drop, position) => {
       if (!page) return
@@ -3020,10 +3062,15 @@ function KnowledgePageEditor({
         if (reference) editor.commands.insertContentAt(editor.state.doc.content.size, reference)
         body = knowledgeHtmlToMarkdown(editor.getHTML(), packagePath)
       } else body = [bodyDraft, knowledgeHtmlToMarkdown(drop.html, packagePath), toMd(reference)].filter(Boolean).join('\n\n')
-      setBodyDraft(body)
-      let next = updateKnowledgePage(store, page.id, { body }, { actor: HUMAN_ACTIVITY_ACTOR })
-      if (!duplicate) next = addKnowledgeLink(next, page.id, drop.link, { actor: HUMAN_ACTIVITY_ACTOR })
-      onSave(next)
+      const pageId = page.id
+      if (latestDraftRef.current.page?.id === pageId) setBodyDraft(body)
+      onSave(current => {
+        let next = updateKnowledgePage(current, pageId, { body }, { actor: HUMAN_ACTIVITY_ACTOR })
+        const currentPage = current.pages.find(candidate => candidate.id === pageId)
+        const currentDuplicate = currentPage?.links.some(link => drop.link.path ? link.path === drop.link.path : drop.link.url ? link.url === drop.link.url : link.title === drop.link.title)
+        if (!currentDuplicate) next = addKnowledgeLink(next, pageId, drop.link, { actor: HUMAN_ACTIVITY_ACTOR })
+        return next
+      })
       recordUserOperation('page.update', 'Added shared content to knowledge page')
     },
   })
@@ -3065,11 +3112,17 @@ function KnowledgePageEditor({
     setTagsDraft(page?.tags.join(', ') ?? '')
   }, [editing, page?.body, page?.tags, page?.title])
 
+  const handledEditRequestNonce = useRef<number | null>(null)
   useEffect(() => {
-    if (editRequest?.pageId === page?.id) {
-      setEditing(true)
-    }
-  }, [editRequest?.nonce, editRequest?.pageId, page?.id])
+    if (
+      !editRequest ||
+      handledEditRequestNonce.current === editRequest.nonce ||
+      editRequest.pageId !== page?.id ||
+      preparedBody.pageId !== page.id
+    ) return
+    handledEditRequestNonce.current = editRequest.nonce
+    setEditing(true)
+  }, [editRequest, page?.id, preparedBody.pageId])
 
   const pageIsDirectory = page ? isKnowledgeDirectoryPage(page) : false
   const baseExtensions = useEditorExtensions({
@@ -3085,24 +3138,64 @@ function KnowledgePageEditor({
     KnowledgeGallery,
   ], [baseExtensions])
 
+  const latestDraftRef = useRef<{
+    page: KnowledgePage | null
+    titleDraft: string
+    bodyDraft: string
+    tagsDraft: string
+    editing: boolean
+  }>({ page: null, titleDraft: '', bodyDraft: '', tagsDraft: '', editing: false })
+  useLayoutEffect(() => {
+    latestDraftRef.current = { page, titleDraft, bodyDraft, tagsDraft, editing }
+  })
+  useLayoutEffect(() => {
+    const pageId = page?.id
+    return () => {
+      const latest = latestDraftRef.current
+      if (!latest.editing || !latest.page || latest.page.id !== pageId) return
+      const tags = latest.tagsDraft.split(',').map(tag => tag.trim()).filter(Boolean)
+      if (
+        latest.titleDraft === latest.page.title &&
+        latest.bodyDraft === latest.page.body &&
+        tags.length === latest.page.tags.length &&
+        tags.every((tag, index) => tag === latest.page?.tags[index])
+      ) return
+      const editedPageId = latest.page.id
+      onSave(current => updateKnowledgePage(
+        current,
+        editedPageId,
+        {
+          title: latest.titleDraft,
+          body: normalizeWikiLinkEscapes(latest.bodyDraft),
+          tags,
+        },
+        { actor: HUMAN_ACTIVITY_ACTOR },
+      ))
+      recordKnowledgeEditSession(
+        editBaselineRef.current,
+        latest.titleDraft,
+        latest.bodyDraft,
+        latest.tagsDraft,
+      )
+    }
+  }, [onSave, page?.id])
+
   useEffect(() => {
     if (!editing || !page || bodyDraft === page.body) return
+    const pageId = page.id
     const timer = window.setTimeout(() => {
-      onSave(
-        updateKnowledgePage(
-          store,
-          page.id,
-          { body: bodyDraft },
-          { actor: HUMAN_ACTIVITY_ACTOR },
-        ),
-      )
+      onSave(current => updateKnowledgePage(
+        current,
+        pageId,
+        { body: bodyDraft },
+        { actor: HUMAN_ACTIVITY_ACTOR },
+      ))
     }, 700)
     return () => window.clearTimeout(timer)
-  }, [bodyDraft, editing, onSave, page, store])
+  }, [bodyDraft, editing, onSave, page])
 
-  // Ledger baseline for one editing session: captured when editing
-  // starts, compared in finishEditing so a session records one concise
-  // operation instead of one per autosave tick.
+  // One concise ledger entry per editing session, whether it ends with
+  // Done or a navigation flush, instead of one per autosave tick.
   const editBaselineRef = useRef<{
     title: string
     body: string
@@ -3158,6 +3251,10 @@ function KnowledgePageEditor({
         },
       }))
   }, [activeSpace.rootPageId, page, store])
+  const backlinks = useMemo(
+    () => page ? findWikiBacklinks(store, page) : [],
+    [store, page],
+  )
 
   if (!page) {
     return (
@@ -3171,56 +3268,45 @@ function KnowledgePageEditor({
   }
 
   const commitPage = (): void => {
-    onSave(
-      updateKnowledgePage(
-        store,
-        page.id,
-        {
-          title: titleDraft,
-          body: normalizeWikiLinkEscapes(bodyDraft),
-          tags: tagsDraft
-            .split(',')
-            .map(tag => tag.trim())
-            .filter(Boolean),
-        },
-        { actor: HUMAN_ACTIVITY_ACTOR },
-      ),
-    )
+    const pageId = page.id
+    onSave(current => updateKnowledgePage(
+      current,
+      pageId,
+      {
+        title: titleDraft,
+        body: normalizeWikiLinkEscapes(bodyDraft),
+        tags: tagsDraft
+          .split(',')
+          .map(tag => tag.trim())
+          .filter(Boolean),
+      },
+      { actor: HUMAN_ACTIVITY_ACTOR },
+    ))
   }
 
   const finishEditing = (): void => {
     commitPage()
-    const baseline = editBaselineRef.current
-    if (baseline) {
-      const nextTitle = titleDraft.trim() || baseline.title
-      const titleChanged = nextTitle !== baseline.title
-      const contentChanged =
-        bodyDraft !== baseline.body || tagsDraft !== baseline.tags
-      if (titleChanged) {
-        recordUserOperation(
-          'page.rename',
-          `Renamed page "${baseline.title}" to "${nextTitle}"`,
-        )
-      }
-      if (contentChanged) {
-        recordUserOperation('page.update', `Edited page "${nextTitle}"`)
-      }
-    }
+    recordKnowledgeEditSession(
+      editBaselineRef.current,
+      titleDraft,
+      bodyDraft,
+      tagsDraft,
+    )
     setEditing(false)
   }
 
   const promoteNote = (): void => {
-    onSave(
-      updateKnowledgePage(
-        store,
-        page.id,
-        {
-          kind: 'wiki',
-          parentId: activeSpace.rootPageId,
-        },
+    onSave(current => {
+      const currentPage = current.pages.find(candidate => candidate.id === page.id)
+      if (!currentPage) return current
+      const rootPageId = current.spaces.find(space => space.id === currentPage.spaceId)?.rootPageId ?? null
+      return updateKnowledgePage(
+        current,
+        currentPage.id,
+        { kind: 'wiki', parentId: rootPageId },
         { actor: HUMAN_ACTIVITY_ACTOR },
-      ),
-    )
+      )
+    })
     recordUserOperation(
       'page.promote',
       `Promoted note "${page.title}" to wiki`,
@@ -3231,11 +3317,12 @@ function KnowledgePageEditor({
   const addLink = (event: FormEvent): void => {
     event.preventDefault()
     if (!pendingLink) return
-    onSave(
-      addKnowledgeLink(store, page.id, pendingLink, {
-        actor: HUMAN_ACTIVITY_ACTOR,
-      }),
-    )
+    onSave(current => addKnowledgeLink(
+      current,
+      page.id,
+      pendingLink,
+      { actor: HUMAN_ACTIVITY_ACTOR },
+    ))
     recordUserOperation(
       'link.add',
       `Linked "${linkTitle.trim() || linkPath.trim()}" to page "${page.title}"`,
@@ -3247,18 +3334,21 @@ function KnowledgePageEditor({
   const addChildPage = (event: FormEvent): void => {
     event.preventDefault()
     if (!childTitle.trim()) return
-    onSave(
-      createKnowledgePage(
-        store,
+    onSave(current => {
+      const currentPage = current.pages.find(candidate => candidate.id === page.id)
+      if (!currentPage) return current
+      const rootPageId = current.spaces.find(space => space.id === currentPage.spaceId)?.rootPageId ?? null
+      return createKnowledgePage(
+        current,
         {
-          spaceId: page.spaceId,
-          parentId: page.kind === 'wiki' ? page.id : activeSpace.rootPageId,
+          spaceId: currentPage.spaceId,
+          parentId: currentPage.kind === 'wiki' ? currentPage.id : rootPageId,
           kind: 'wiki',
           title: childTitle,
         },
         { actor: HUMAN_ACTIVITY_ACTOR },
-      ),
-    )
+      )
+    })
     recordUserOperation(
       'page.create',
       `Created page "${childTitle.trim()}" under "${page.title}"`,
@@ -3275,7 +3365,6 @@ function KnowledgePageEditor({
       ? pagePath
       : pagePath.filter(pathPage => pathPage.id !== page.id)
   const wikiLinks = extractWikiLinks(bodyDraft)
-  const backlinks = findWikiBacklinks(store, page)
   const childPages = getChildWikiPages(store, page.id)
   const openOrCreateWikiLink = (title: string): void => {
     const existing = findPageByWikiTitle(store, page.spaceId, title)
@@ -3283,18 +3372,25 @@ function KnowledgePageEditor({
       onSelectPage(existing.id)
       return
     }
-    onSave(
-      createKnowledgePage(
-        store,
+    onSave(current => {
+      const currentExisting = findPageByWikiTitle(current, page.spaceId, title)
+      if (currentExisting) {
+        return { ...current, activeSpaceId: currentExisting.spaceId, activePageId: currentExisting.id }
+      }
+      const currentPage = current.pages.find(candidate => candidate.id === page.id)
+      if (!currentPage) return current
+      const rootPageId = current.spaces.find(space => space.id === currentPage.spaceId)?.rootPageId ?? null
+      return createKnowledgePage(
+        current,
         {
-          spaceId: page.spaceId,
-          parentId: page.kind === 'wiki' ? page.id : activeSpace.rootPageId,
+          spaceId: currentPage.spaceId,
+          parentId: currentPage.kind === 'wiki' ? currentPage.id : rootPageId,
           kind: 'wiki',
           title,
         },
         { actor: HUMAN_ACTIVITY_ACTOR },
-      ),
-    )
+      )
+    })
     recordUserOperation(
       'page.create',
       `Created page "${title}" from a wikilink on "${page.title}"`,
@@ -3319,10 +3415,10 @@ function KnowledgePageEditor({
   // Built inline it ran on every render: with images embedded as data URLs that
   // is tens of megabytes of regex and HTML work, and React then reset the whole
   // article — opening or closing the image preview took over a second.
-  // Wikilink resolution only depends on which titles exist, so the article
+  // Wikilink resolution only depends on page identity metadata, so the article
   // is not rebuilt for every save tick of the store.
   const wikiTitleKey = useMemo(
-    () => store.pages.map(candidate => `${candidate.spaceId}\u0000${candidate.title}\u0000${candidate.slug}\u0000${(candidate.aliases ?? []).join('\u0001')}`).join('\n'),
+    () => store.pages.map(candidate => `${candidate.spaceId}\u0000${candidate.title}\u0000${candidate.slug}\u0000${candidate.kind}\u0000${candidate.createdAt}\u0000${(candidate.aliases ?? []).join('\u0001')}`).join('\n'),
     [store.pages],
   )
   const renderedWikiHtml = useMemo(
@@ -3378,17 +3474,32 @@ function KnowledgePageEditor({
     body: string,
     summary: string,
     importedLinks: Array<{ title: string; path: string }> = [],
+    expected?: { pageId: string; baseBody: string },
   ): void => {
-    if (body === bodyDraft) return
-    setBodyDraft(body)
-    let next = updateKnowledgePage(store, page.id, { body }, { actor: HUMAN_ACTIVITY_ACTOR })
-    for (const link of importedLinks) {
-      if (!page.links.some(existing => existing.path === link.path)) {
-        next = addKnowledgeLink(next, page.id, { type: 'file', ...link }, { actor: HUMAN_ACTIVITY_ACTOR })
+    const destinationPageId = expected?.pageId ?? page.id
+    if (!expected && body === bodyDraft) return
+    const visibleDraft = latestDraftRef.current
+    if (
+      visibleDraft.page?.id === destinationPageId &&
+      (!expected || visibleDraft.bodyDraft === expected.baseBody)
+    ) setBodyDraft(body)
+    let applied = false
+    onSave(current => {
+      const destination = current.pages.find(candidate => candidate.id === destinationPageId)
+      if (!destination || (expected && destination.body !== expected.baseBody)) {
+        return current
       }
-    }
-    onSave(next)
-    recordUserOperation('page.update', summary)
+      applied = true
+      let next = updateKnowledgePage(current, destinationPageId, { body }, { actor: HUMAN_ACTIVITY_ACTOR })
+      for (const link of importedLinks) {
+        if (!destination.links.some(existing => existing.path === link.path)) {
+          next = addKnowledgeLink(next, destinationPageId, { type: 'file', ...link }, { actor: HUMAN_ACTIVITY_ACTOR })
+        }
+      }
+      return next
+    })
+    if (applied) recordUserOperation('page.update', summary)
+    else setGalleryError('The page changed while images were being added. No gallery changes were saved; try again.')
   }
 
   const editableGalleryBody = (): string =>
@@ -3411,6 +3522,9 @@ function KnowledgePageEditor({
     const targetGallery = galleryImportIndexRef.current
     galleryImportIndexRef.current = null
     if (targetGallery === null || files.length === 0) return
+    const destinationPageId = page.id
+    const baseBody = bodyDraft
+    const galleryBody = editableGalleryBody()
     setGalleryError('')
     try {
       for (const file of files) {
@@ -3432,9 +3546,10 @@ function KnowledgePageEditor({
         importedLinks.push({ title: alt, path: saved.absolutePath })
       }
       saveGalleryBody(
-        appendKnowledgeGalleryImages(editableGalleryBody(), targetGallery, imported),
+        appendKnowledgeGalleryImages(galleryBody, targetGallery, imported),
         `Added ${imported.length} image${imported.length === 1 ? '' : 's'} to gallery on “${page.title}”`,
         importedLinks,
+        { pageId: destinationPageId, baseBody },
       )
     } catch (error) {
       setGalleryError(error instanceof Error ? error.message : String(error))
@@ -3706,6 +3821,7 @@ function KnowledgePageEditor({
                     </StyledActivityWrap>
                     <StyledEditPageButton
                       variant="subtle"
+                      disabled={preparedBody.pageId !== page.id}
                       onClick={() => setEditing(true)}
                     >
                       Edit page

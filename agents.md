@@ -70,7 +70,7 @@ determine where this belongs" is a failure.
    `page` names an existing one), `rename` (new `title`), `promote`
    (note → wiki), `merge` (`into` the surviving page, `body` its merged
    content), or `delete`. Markdown body, `[[Page name]]` wikilinks,
-   tags as a comma-separated list, `links` for the files, app
+   tags as a comma-separated string or string array, `links` for the files, app
    resources, or URLs the page concerns, and always the one-line
    summary. To show local images inline, pass up to 100 absolute image
    paths in `importAssets`; the tool copies them into the package,

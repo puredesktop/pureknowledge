@@ -388,8 +388,18 @@ export function updateKnowledgePage(
   const tags = patch.tags ?? page.tags
   const kind = patch.kind ?? page.kind
   const parentId = patch.parentId === undefined ? page.parentId : patch.parentId
+  const isSpaceRoot = store.spaces.some(space => space.rootPageId === pageId)
   if (parentId !== page.parentId && wouldCreateParentCycle(store, pageId, parentId)) {
     throw new Error(`"${page.title}" cannot be filed under itself or one of its own pages.`)
+  }
+  if (isSpaceRoot && (kind !== 'wiki' || parentId !== null)) {
+    throw new Error(`"${page.title}" is a space root and must remain a top-level wiki page.`)
+  }
+  if (parentId) {
+    const parent = store.pages.find(candidate => candidate.id === parentId)
+    if (parent && parent.spaceId !== page.spaceId) {
+      throw new Error(`"${page.title}" cannot be filed under a page from another space.`)
+    }
   }
 
   if (
@@ -775,6 +785,9 @@ function applyAgentChangeToPages(
     change.pageId &&
     change.patch.mergeIntoPageId
   ) {
+    if (wouldCreateParentCycle(store, change.pageId, change.patch.mergeIntoPageId)) {
+      throw new Error('A page cannot merge into its own descendant because that would delete the surviving page.')
+    }
     // The merged body was proposed against the surviving page; the source
     // page is deleted once the survivor carries the combined content.
     nextStore = updateKnowledgePage(
@@ -933,24 +946,82 @@ export function getChildWikiPages(
     .sort((a, b) => a.title.localeCompare(b.title))
 }
 
+interface WikiTitleIndex {
+  titles: Map<string, KnowledgePage[]>
+  aliases: Map<string, KnowledgePage[]>
+  slugs: Map<string, KnowledgePage[]>
+}
+
+const wikiTitleIndexes = new WeakMap<KnowledgeStore, WikiTitleIndex>()
+
+function addWikiTitleIndexEntry(
+  index: Map<string, KnowledgePage[]>,
+  key: string,
+  page: KnowledgePage,
+): void {
+  index.set(key, [...(index.get(key) ?? []), page])
+}
+
+function wikiTitleIndex(store: KnowledgeStore): WikiTitleIndex {
+  const cached = wikiTitleIndexes.get(store)
+  if (cached) return cached
+  const index: WikiTitleIndex = {
+    titles: new Map(),
+    aliases: new Map(),
+    slugs: new Map(),
+  }
+  for (const page of store.pages) {
+    addWikiTitleIndexEntry(
+      index.titles,
+      `${page.spaceId}\u0000${page.title.trim().toLowerCase()}`,
+      page,
+    )
+    for (const alias of page.aliases ?? []) {
+      addWikiTitleIndexEntry(
+        index.aliases,
+        `${page.spaceId}\u0000${alias.trim().toLowerCase()}`,
+        page,
+      )
+    }
+    addWikiTitleIndexEntry(index.slugs, `${page.spaceId}\u0000${page.slug}`, page)
+  }
+  for (const pages of [
+    ...index.titles.values(),
+    ...index.aliases.values(),
+    ...index.slugs.values(),
+  ]) {
+    pages.sort(
+      (a, b) =>
+        Number(a.kind !== 'wiki') - Number(b.kind !== 'wiki') ||
+        a.createdAt.localeCompare(b.createdAt) ||
+        a.id.localeCompare(b.id),
+    )
+  }
+  wikiTitleIndexes.set(store, index)
+  return index
+}
+
+function resolveWikiTitle(
+  index: WikiTitleIndex,
+  spaceId: string,
+  title: string,
+): KnowledgePage | null {
+  const lowered = title.trim().toLowerCase()
+  const slug = slugifyPageTitle(title)
+  return (
+    index.titles.get(`${spaceId}\u0000${lowered}`)?.[0] ??
+    index.aliases.get(`${spaceId}\u0000${lowered}`)?.[0] ??
+    index.slugs.get(`${spaceId}\u0000${slug}`)?.[0] ??
+    null
+  )
+}
+
 export function findPageByWikiTitle(
   store: KnowledgeStore,
   spaceId: string,
   title: string,
 ): KnowledgePage | null {
-  const slug = slugifyPageTitle(title)
-  return (
-    store.pages.find(
-      page =>
-        page.spaceId === spaceId &&
-        page.kind === 'wiki' &&
-        (page.slug === slug ||
-          page.title.toLowerCase() === title.trim().toLowerCase() ||
-          page.aliases?.some(
-            alias => alias.trim().toLowerCase() === title.trim().toLowerCase(),
-          )),
-    ) ?? null
-  )
+  return resolveWikiTitle(wikiTitleIndex(store), spaceId, title)
 }
 
 export function findPagePath(
@@ -973,17 +1044,13 @@ export function findWikiBacklinks(
   store: KnowledgeStore,
   targetPage: KnowledgePage,
 ): KnowledgePage[] {
-  const targetNames = new Set([
-    targetPage.slug,
-    slugifyPageTitle(targetPage.title),
-    ...(targetPage.aliases ?? []).map(slugifyPageTitle),
-  ])
+  const index = wikiTitleIndex(store)
   return store.pages.filter(page => {
     if (page.id === targetPage.id || page.spaceId !== targetPage.spaceId) {
       return false
     }
-    return extractWikiLinks(page.body).some(link =>
-      targetNames.has(slugifyPageTitle(link)),
+    return extractWikiLinks(page.body).some(
+      link => resolveWikiTitle(index, page.spaceId, link)?.id === targetPage.id,
     )
   })
 }
@@ -1013,15 +1080,20 @@ export function reviewKnowledgeStore(
     store.spaces.map(space => space.rootPageId).filter(Boolean) as string[],
   )
 
+  const index = wikiTitleIndex(store)
+  const linkedPageIds = new Set<string>()
   for (const page of pages) {
     for (const link of extractWikiLinks(page.body)) {
-      if (!findPageByWikiTitle(store, spaceId, link)) {
+      const linkedPage = resolveWikiTitle(index, spaceId, link)
+      if (!linkedPage) {
         findings.push({
           kind: 'brokenLink',
           pageId: page.id,
           pageTitle: page.title,
           detail: `[[${link}]] resolves to no page`,
         })
+      } else if (linkedPage.id !== page.id) {
+        linkedPageIds.add(linkedPage.id)
       }
     }
   }
@@ -1037,7 +1109,7 @@ export function reviewKnowledgeStore(
     if (rootIds.has(page.id)) continue
     if (isKnowledgeDirectoryPage(page)) continue
     if (childCount.get(page.id)) continue
-    if (findWikiBacklinks(store, page).length === 0) {
+    if (!linkedPageIds.has(page.id)) {
       findings.push({
         kind: 'orphan',
         pageId: page.id,
