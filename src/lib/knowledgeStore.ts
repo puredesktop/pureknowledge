@@ -513,9 +513,25 @@ export function normalizeKnowledgeLink(
   }
 }
 
+const WEB_SCHEME = /^https?:\/\//i
+
+function isValidWebUrl(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return (
+      (url.protocol === 'http:' || url.protocol === 'https:') &&
+      Boolean(url.hostname)
+    )
+  } catch {
+    return false
+  }
+}
+
 /**
  * The link the page's "Link" form adds: a target is required (a title alone
  * points nowhere), and web URLs are recognized by scheme, case-insensitively.
+ * A target with a web scheme that does not parse is refused, not kept as a
+ * file path.
  */
 export function manualKnowledgeLinkInput(
   title: string,
@@ -523,14 +539,15 @@ export function manualKnowledgeLinkInput(
 ): Partial<KnowledgeLink> | null {
   const trimmed = target.trim()
   if (!trimmed) return null
-  return /^https?:\/\//i.test(trimmed)
-    ? { type: 'url', title, url: trimmed }
-    : { type: 'file', title, path: trimmed }
+  if (!WEB_SCHEME.test(trimmed)) return { type: 'file', title, path: trimmed }
+  return isValidWebUrl(trimmed) ? { type: 'url', title, url: trimmed } : null
 }
 
-/** Whether "Open" can act on a link: only paths and URLs are openable here. */
+/** Whether "Open" can act on a link: only paths and valid web URLs are openable here. */
 export function canOpenKnowledgeLink(link: KnowledgeLink): boolean {
-  return Boolean(link.path?.trim() || link.url?.trim())
+  if (link.path?.trim()) return true
+  const url = link.url?.trim()
+  return Boolean(url && isValidWebUrl(url))
 }
 
 export function addKnowledgeLink(

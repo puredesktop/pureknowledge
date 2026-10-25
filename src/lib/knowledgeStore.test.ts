@@ -487,9 +487,18 @@ describe('knowledge store', () => {
     })
   })
 
-  it('opens only links with a path or URL', () => {
+  it('refuses malformed web URLs instead of saving them as links', () => {
+    for (const target of ['https://', 'HTTPS://exa mple.test', 'http://[broken']) {
+      expect(manualKnowledgeLinkInput('Spec', target)).toBeNull()
+    }
+  })
+
+  it('opens only links with a path or valid URL', () => {
     const resourceOnly = normalizeKnowledgeLink({ resourceId: 'res-1' })!
     expect(canOpenKnowledgeLink(resourceOnly)).toBe(false)
+    expect(
+      canOpenKnowledgeLink(normalizeKnowledgeLink({ url: 'http://[broken' })!),
+    ).toBe(false)
     expect(
       canOpenKnowledgeLink(normalizeKnowledgeLink({ url: 'https://example.test' })!),
     ).toBe(true)

@@ -3227,12 +3227,12 @@ function KnowledgePageEditor({
     )
   }
 
+  const pendingLink = manualKnowledgeLinkInput(linkTitle, linkPath)
   const addLink = (event: FormEvent): void => {
     event.preventDefault()
-    const linkInput = manualKnowledgeLinkInput(linkTitle, linkPath)
-    if (!linkInput) return
+    if (!pendingLink) return
     onSave(
-      addKnowledgeLink(store, page.id, linkInput, {
+      addKnowledgeLink(store, page.id, pendingLink, {
         actor: HUMAN_ACTIVITY_ACTOR,
       }),
     )
@@ -3885,7 +3885,12 @@ function KnowledgePageEditor({
                     variant="subtle"
                     size="sm"
                     type="submit"
-                    disabled={!linkPath.trim()}
+                    disabled={!pendingLink}
+                    title={
+                      linkPath.trim() && !pendingLink
+                        ? 'This web address is not valid'
+                        : undefined
+                    }
                   >
                     Link
                   </Button>
@@ -4089,7 +4094,7 @@ function KnowledgeLinkRow({
         title={
           openable
             ? undefined
-            : 'This link has no file path or URL, so it cannot be opened from here'
+            : 'This link has no file path or valid web address, so it cannot be opened from here'
         }
       >
         Open
