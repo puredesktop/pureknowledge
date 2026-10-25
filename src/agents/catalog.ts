@@ -29,6 +29,8 @@ export class AgentKnowledgeToolError extends Error {
  */
 export interface KnowledgeAgentToolContext {
   store: KnowledgeStore | null
-  saveStore: (nextStore: KnowledgeStore) => Promise<void>
+  saveStore: (
+    update: KnowledgeStore | ((current: KnowledgeStore) => KnowledgeStore),
+  ) => Promise<void>
   storePath: string
 }

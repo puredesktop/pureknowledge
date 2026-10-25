@@ -470,6 +470,75 @@ describe('knowledge store', () => {
       path: '/home/developer/PureScience/source.pdf',
     })
   })
+
+  it('resolves exact titles before colliding slugs and attributes backlinks to that page', () => {
+    let store = createDefaultKnowledgeStore()
+    for (const title of ['C#', 'C++']) {
+      store = createKnowledgePage(store, {
+        spaceId: store.activeSpaceId,
+        parentId: store.spaces[0]!.rootPageId,
+        kind: 'wiki',
+        title,
+      })
+    }
+    const csharp = store.pages.find(page => page.title === 'C#')!
+    const cplusplus = store.pages.find(page => page.title === 'C++')!
+    store = createKnowledgePage(store, {
+      spaceId: store.activeSpaceId,
+      parentId: store.spaces[0]!.rootPageId,
+      kind: 'wiki',
+      title: 'Source',
+      body: 'See [[C#]].',
+    })
+    expect(findPageByWikiTitle(store, store.activeSpaceId, 'C#')?.id).toBe(csharp.id)
+    expect(findWikiBacklinks(store, csharp).map(page => page.title)).toEqual(['Source'])
+    expect(findWikiBacklinks(store, cplusplus)).toEqual([])
+  })
+
+  it('does not report links to existing notes as broken', () => {
+    let store = createDefaultKnowledgeStore()
+    store = createKnowledgePage(store, {
+      spaceId: store.activeSpaceId,
+      kind: 'note',
+      title: 'Ideas',
+    })
+    store = createKnowledgePage(store, {
+      spaceId: store.activeSpaceId,
+      parentId: store.spaces[0]!.rootPageId,
+      kind: 'wiki',
+      title: 'Source',
+      body: 'See [[Ideas]].',
+    })
+    const findings = reviewKnowledgeStore(store, store.activeSpaceId, Date.now())
+    expect(findings.filter(finding => finding.kind === 'brokenLink')).toEqual([])
+  })
+
+  it('refuses a direct agent merge that would delete its surviving descendant', () => {
+    let store = createDefaultKnowledgeStore()
+    store = createKnowledgePage(store, {
+      spaceId: store.activeSpaceId,
+      parentId: store.spaces[0]!.rootPageId,
+      kind: 'wiki',
+      title: 'Parent',
+    })
+    const parent = store.pages[0]!
+    store = createKnowledgePage(store, {
+      spaceId: store.activeSpaceId,
+      parentId: parent.id,
+      kind: 'wiki',
+      title: 'Child',
+    })
+    const child = store.pages[0]!
+    expect(() => applyKnowledgeAgentChange(store, {
+      spaceId: store.activeSpaceId,
+      pageId: parent.id,
+      agentName: 'Steward',
+      changeType: 'page.merge',
+      title: parent.title,
+      summary: 'Merge duplicates.',
+      patch: { body: 'Merged.', mergeIntoPageId: child.id },
+    })).toThrow(/descendant/)
+  })
 })
 
 describe('rankKnowledgePages', () => {

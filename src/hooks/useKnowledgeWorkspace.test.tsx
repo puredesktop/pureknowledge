@@ -365,4 +365,74 @@ describe('knowledge workspace reliability', () => {
     expect(current.storePath).toBe(B)
     expect(current.store!.pages[0]!.title).toMatch(/^B /)
   })
+
+  it('clears a recovered external read error', async () => {
+    seed(A, 'A')
+    await render()
+    const originalIndex = io.files.get(`${A}/index.json`)!
+    io.files.set(`${A}/index.json`, '{ damaged')
+    vi.useFakeTimers()
+    await act(async () => {
+      for (const listener of io.listeners)
+        listener({ kind: 'content', path: `${A}/index.json` })
+      await vi.advanceTimersByTimeAsync(400)
+    })
+    expect(current.error).toBeInstanceOf(Error)
+    io.files.set(`${A}/index.json`, originalIndex)
+    await act(async () => {
+      for (const listener of io.listeners)
+        listener({ kind: 'content', path: `${A}/index.json` })
+      await vi.advanceTimersByTimeAsync(400)
+    })
+    expect(current.error).toBeNull()
+    expect(current.store).not.toBeNull()
+  })
+
+  it('keeps a save failure visible after a successful external read', async () => {
+    seed(A, 'A')
+    await render()
+    const page = current.store!.pages[0]!
+    io.failWrite = `${A}/pages/${pageFileName(page)}`
+    await act(async () => {
+      await current.saveStore(updateKnowledgePage(current.store!, page.id, { body: 'Unsaved edit' })).catch(() => undefined)
+    })
+    expect(current.error?.message).toBe('Disk unavailable')
+    io.failWrite = ''
+    vi.useFakeTimers()
+    await act(async () => {
+      for (const listener of io.listeners)
+        listener({ kind: 'content', path: `${A}/index.json` })
+      await vi.advanceTimersByTimeAsync(400)
+    })
+    expect(current.error?.message).toBe('Disk unavailable')
+    expect(current.saveFailed).toBe(true)
+  })
+
+  it('imports the same markdown path again when it is opened again', async () => {
+    seed(A, 'A')
+    const importPath = '/audit/note.md'
+    io.files.set(importPath, 'First version')
+    const handled = vi.fn()
+    await render(importPath, handled)
+    expect(current.store!.pages.filter(page => page.title === 'note')).toHaveLength(1)
+    await render(null, handled)
+    io.files.set(importPath, 'Second version')
+    await render(importPath, handled)
+    const imported = current.store!.pages.filter(page => page.title === 'note')
+    expect(imported).toHaveLength(2)
+    expect(imported.map(page => page.body)).toContain('Second version')
+    expect(handled).toHaveBeenCalledTimes(2)
+  })
+
+  it('applies selection updates to the latest local store, not a stale snapshot', async () => {
+    seed(A, 'A')
+    await render()
+    const page = current.store!.pages[0]!
+    await act(async () => {
+      await current.saveStore(updateKnowledgePage(current.store!, page.id, { title: 'Committed title' }))
+      await current.saveStore(latest => ({ ...latest, activePageId: null }))
+    })
+    expect(current.store!.pages[0]!.title).toBe('Committed title')
+    expect(current.store!.activePageId).toBeNull()
+  })
 })

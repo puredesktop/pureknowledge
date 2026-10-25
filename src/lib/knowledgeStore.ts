@@ -388,8 +388,18 @@ export function updateKnowledgePage(
   const tags = patch.tags ?? page.tags
   const kind = patch.kind ?? page.kind
   const parentId = patch.parentId === undefined ? page.parentId : patch.parentId
+  const isSpaceRoot = store.spaces.some(space => space.rootPageId === pageId)
   if (parentId !== page.parentId && wouldCreateParentCycle(store, pageId, parentId)) {
     throw new Error(`"${page.title}" cannot be filed under itself or one of its own pages.`)
+  }
+  if (isSpaceRoot && (kind !== 'wiki' || parentId !== null)) {
+    throw new Error(`"${page.title}" is a space root and must remain a top-level wiki page.`)
+  }
+  if (parentId) {
+    const parent = store.pages.find(candidate => candidate.id === parentId)
+    if (parent && parent.spaceId !== page.spaceId) {
+      throw new Error(`"${page.title}" cannot be filed under a page from another space.`)
+    }
   }
 
   if (
@@ -738,6 +748,9 @@ function applyAgentChangeToPages(
     change.pageId &&
     change.patch.mergeIntoPageId
   ) {
+    if (wouldCreateParentCycle(store, change.pageId, change.patch.mergeIntoPageId)) {
+      throw new Error('A page cannot merge into its own descendant because that would delete the surviving page.')
+    }
     // The merged body was proposed against the surviving page; the source
     // page is deleted once the survivor carries the combined content.
     nextStore = updateKnowledgePage(
@@ -901,19 +914,18 @@ export function findPageByWikiTitle(
   spaceId: string,
   title: string,
 ): KnowledgePage | null {
-  const slug = slugifyPageTitle(title)
-  return (
-    store.pages.find(
-      page =>
-        page.spaceId === spaceId &&
-        page.kind === 'wiki' &&
-        (page.slug === slug ||
-          page.title.toLowerCase() === title.trim().toLowerCase() ||
-          page.aliases?.some(
-            alias => alias.trim().toLowerCase() === title.trim().toLowerCase(),
-          )),
-    ) ?? null
+  const lowered = title.trim().toLowerCase()
+  const pages = store.pages.filter(page => page.spaceId === spaceId)
+  const exact = pages.filter(
+    page =>
+      page.title.toLowerCase() === lowered ||
+      page.aliases?.some(alias => alias.trim().toLowerCase() === lowered),
   )
+  const slug = slugifyPageTitle(title)
+  const matches = exact.length
+    ? exact
+    : pages.filter(page => page.slug === slug)
+  return matches.length === 1 ? matches[0]! : null
 }
 
 export function findPagePath(
@@ -936,17 +948,12 @@ export function findWikiBacklinks(
   store: KnowledgeStore,
   targetPage: KnowledgePage,
 ): KnowledgePage[] {
-  const targetNames = new Set([
-    targetPage.slug,
-    slugifyPageTitle(targetPage.title),
-    ...(targetPage.aliases ?? []).map(slugifyPageTitle),
-  ])
   return store.pages.filter(page => {
     if (page.id === targetPage.id || page.spaceId !== targetPage.spaceId) {
       return false
     }
-    return extractWikiLinks(page.body).some(link =>
-      targetNames.has(slugifyPageTitle(link)),
+    return extractWikiLinks(page.body).some(
+      link => findPageByWikiTitle(store, page.spaceId, link)?.id === targetPage.id,
     )
   })
 }
