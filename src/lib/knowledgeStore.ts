@@ -513,6 +513,26 @@ export function normalizeKnowledgeLink(
   }
 }
 
+/**
+ * The link the page's "Link" form adds: a target is required (a title alone
+ * points nowhere), and web URLs are recognized by scheme, case-insensitively.
+ */
+export function manualKnowledgeLinkInput(
+  title: string,
+  target: string,
+): Partial<KnowledgeLink> | null {
+  const trimmed = target.trim()
+  if (!trimmed) return null
+  return /^https?:\/\//i.test(trimmed)
+    ? { type: 'url', title, url: trimmed }
+    : { type: 'file', title, path: trimmed }
+}
+
+/** Whether "Open" can act on a link: only paths and URLs are openable here. */
+export function canOpenKnowledgeLink(link: KnowledgeLink): boolean {
+  return Boolean(link.path?.trim() || link.url?.trim())
+}
+
 export function addKnowledgeLink(
   store: KnowledgeStore,
   pageId: string,

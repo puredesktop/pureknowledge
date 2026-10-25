@@ -93,6 +93,7 @@ import { usePureKnowledgeBoot } from './hooks/usePureKnowledgeBoot'
 import {
   acceptKnowledgeAgentChange,
   addKnowledgeLink,
+  canOpenKnowledgeLink,
   createDirectoryIndexBody,
   createKnowledgePage,
   createKnowledgeSpace,
@@ -105,6 +106,7 @@ import {
   getChildWikiPages,
   getWikiPagesForSpace,
   isKnowledgeDirectoryPage,
+  manualKnowledgeLinkInput,
   rankKnowledgePages,
   rejectKnowledgeAgentChange,
   updateKnowledgePage,
@@ -3227,19 +3229,12 @@ function KnowledgePageEditor({
 
   const addLink = (event: FormEvent): void => {
     event.preventDefault()
-    if (!linkPath.trim() && !linkTitle.trim()) return
+    const linkInput = manualKnowledgeLinkInput(linkTitle, linkPath)
+    if (!linkInput) return
     onSave(
-      addKnowledgeLink(
-        store,
-        page.id,
-        {
-          type: linkPath.startsWith('http') ? 'url' : 'file',
-          title: linkTitle,
-          path: linkPath.startsWith('http') ? undefined : linkPath,
-          url: linkPath.startsWith('http') ? linkPath : undefined,
-        },
-        { actor: HUMAN_ACTIVITY_ACTOR },
-      ),
+      addKnowledgeLink(store, page.id, linkInput, {
+        actor: HUMAN_ACTIVITY_ACTOR,
+      }),
     )
     recordUserOperation(
       'link.add',
@@ -3886,7 +3881,12 @@ function KnowledgePageEditor({
                     placeholder="Path or URL"
                     onChange={event => setLinkPath(event.target.value)}
                   />
-                  <Button variant="subtle" size="sm" type="submit">
+                  <Button
+                    variant="subtle"
+                    size="sm"
+                    type="submit"
+                    disabled={!linkPath.trim()}
+                  >
                     Link
                   </Button>
                 </StyledQuietForm>
@@ -4060,6 +4060,7 @@ function KnowledgeLinkRow({
 }: {
   link: KnowledgeLink
 }): React.ReactElement {
+  const openable = canOpenKnowledgeLink(link)
   const openLink = (): void => {
     if (link.path) {
       void catalogOpen({
@@ -4080,7 +4081,17 @@ function KnowledgeLinkRow({
         <strong>{link.title}</strong>
         <StyledSubtle>{link.path || link.url || link.resourceId}</StyledSubtle>
       </div>
-      <Button variant="subtle" size="sm" onClick={openLink}>
+      <Button
+        variant="subtle"
+        size="sm"
+        onClick={openLink}
+        disabled={!openable}
+        title={
+          openable
+            ? undefined
+            : 'This link has no file path or URL, so it cannot be opened from here'
+        }
+      >
         Open
       </Button>
     </StyledLinkRow>
