@@ -4089,7 +4089,7 @@ function KnowledgeLinkRow({
 
 export function App(): React.ReactElement {
   const { error: bridgeError, ready, meta } = usePlatformBridge()
-  const { boot, bootError, booting } = usePureKnowledgeBoot(ready)
+  const { boot, bootError, booting, retry } = usePureKnowledgeBoot(ready)
   const { resource: viewportResource, clearResource } =
     usePlatformViewportResource(ready, meta)
 
@@ -4121,6 +4121,7 @@ export function App(): React.ReactElement {
             tone={bootError ? 'error' : 'neutral'}
             title={bootError ? 'Boot failed' : 'pure knowledge'}
             message={message}
+            action={bootError ? { label: 'Retry', onClick: retry } : undefined}
           />
         </AppShell>
       </AppFrame>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   fetchKnowledgeSettings,
   fetchShellPreferences,
@@ -9,6 +9,7 @@ interface UsePureKnowledgeBootResult {
   boot: KnowledgeBootState | null
   bootError: Error | null
   booting: boolean
+  retry: () => void
 }
 
 export function usePureKnowledgeBoot(
@@ -17,6 +18,8 @@ export function usePureKnowledgeBoot(
   const [boot, setBoot] = useState<KnowledgeBootState | null>(null)
   const [bootError, setBootError] = useState<Error | null>(null)
   const [booting, setBooting] = useState(false)
+  const [attempt, setAttempt] = useState(0)
+  const retry = useCallback(() => setAttempt(value => value + 1), [])
 
   useEffect(() => {
     if (!ready) return
@@ -49,7 +52,7 @@ export function usePureKnowledgeBoot(
     return () => {
       cancelled = true
     }
-  }, [ready])
+  }, [ready, attempt])
 
-  return { boot, bootError, booting }
+  return { boot, bootError, booting, retry }
 }
