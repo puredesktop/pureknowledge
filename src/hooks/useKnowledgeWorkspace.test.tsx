@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { act } from 'react'
+import { onPlatformDocumentsChanged } from '@purescience/platform-ui/bridge/documents'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useKnowledgeWorkspace } from './useKnowledgeWorkspace'
@@ -160,6 +161,25 @@ describe('knowledge workspace reliability', () => {
     expect(io.files.get(file)).toContain('Keep this edit')
     expect(current.saveFailed).toBe(false)
     expect(current.error).toBeNull()
+  })
+
+  it('keeps the file watcher subscribed when a save fails and recovers', async () => {
+    seed(A, 'A')
+    await render()
+    expect(onPlatformDocumentsChanged).toHaveBeenCalledTimes(1)
+    const page = current.store!.pages[0]!
+    const next = updateKnowledgePage(current.store!, page.id, { body: 'Keep this edit' })
+    io.failWrite = `${A}/pages/${pageFileName(page)}`
+    await act(async () => {
+      await current.saveStore(next).catch(() => undefined)
+    })
+    expect(current.saveFailed).toBe(true)
+    io.failWrite = ''
+    await act(async () => {
+      await current.saveStore(next)
+    })
+    expect(current.saveFailed).toBe(false)
+    expect(onPlatformDocumentsChanged).toHaveBeenCalledTimes(1)
   })
 
   it('keeps saving true until the whole queued save chain finishes', async () => {

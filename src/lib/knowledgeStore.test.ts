@@ -495,6 +495,60 @@ describe('knowledge store', () => {
     expect(findWikiBacklinks(store, cplusplus)).toEqual([])
   })
 
+  it('resolves duplicate titles deterministically without breaking links or backlinks', () => {
+    let store = createDefaultKnowledgeStore()
+    for (const title of ['Dup', 'Dup', 'Source']) {
+      store = createKnowledgePage(store, {
+        spaceId: store.activeSpaceId,
+        parentId: store.spaces[0]!.rootPageId,
+        kind: 'wiki',
+        title,
+        body: title === 'Source' ? 'See [[Dup]].' : '',
+      })
+    }
+    const source = store.pages[0]!
+    const newer = store.pages[1]!
+    const older = store.pages[2]!
+    store.pages = store.pages.map(page =>
+      page.id === older.id
+        ? { ...page, createdAt: '2025-01-01T00:00:00.000Z' }
+        : page.id === newer.id
+          ? { ...page, createdAt: '2026-01-01T00:00:00.000Z' }
+          : page,
+    )
+
+    expect(findPageByWikiTitle(store, store.activeSpaceId, 'Dup')?.id).toBe(older.id)
+    expect(findWikiBacklinks(store, older).map(page => page.id)).toEqual([source.id])
+    expect(findWikiBacklinks(store, newer)).toEqual([])
+    const findings = reviewKnowledgeStore(store, store.activeSpaceId, Date.now())
+    expect(findings.filter(finding => finding.kind === 'brokenLink')).toEqual([])
+    expect(findings.some(finding => finding.kind === 'orphan' && finding.pageId === older.id)).toBe(false)
+    expect(findings.filter(finding => finding.kind === 'duplicateTitle')).toHaveLength(2)
+  })
+
+  it('prefers a wiki page over a newer note with the same title', () => {
+    let store = createDefaultKnowledgeStore()
+    store = createKnowledgePage(store, {
+      spaceId: store.activeSpaceId,
+      parentId: store.spaces[0]!.rootPageId,
+      kind: 'note',
+      title: 'Ideas',
+    })
+    const note = store.pages[0]!
+    store = createKnowledgePage(store, {
+      spaceId: store.activeSpaceId,
+      parentId: store.spaces[0]!.rootPageId,
+      kind: 'wiki',
+      title: 'Ideas',
+    })
+    const wiki = store.pages[0]!
+    store.pages = store.pages.map(page => ({
+      ...page,
+      createdAt: page.id === note.id ? '2025-01-01T00:00:00.000Z' : page.createdAt,
+    }))
+    expect(findPageByWikiTitle(store, store.activeSpaceId, 'Ideas')?.id).toBe(wiki.id)
+  })
+
   it('does not report links to existing notes as broken', () => {
     let store = createDefaultKnowledgeStore()
     store = createKnowledgePage(store, {

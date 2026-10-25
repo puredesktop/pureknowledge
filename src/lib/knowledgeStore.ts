@@ -909,23 +909,82 @@ export function getChildWikiPages(
     .sort((a, b) => a.title.localeCompare(b.title))
 }
 
+interface WikiTitleIndex {
+  titles: Map<string, KnowledgePage[]>
+  aliases: Map<string, KnowledgePage[]>
+  slugs: Map<string, KnowledgePage[]>
+}
+
+const wikiTitleIndexes = new WeakMap<KnowledgeStore, WikiTitleIndex>()
+
+function addWikiTitleIndexEntry(
+  index: Map<string, KnowledgePage[]>,
+  key: string,
+  page: KnowledgePage,
+): void {
+  index.set(key, [...(index.get(key) ?? []), page])
+}
+
+function wikiTitleIndex(store: KnowledgeStore): WikiTitleIndex {
+  const cached = wikiTitleIndexes.get(store)
+  if (cached) return cached
+  const index: WikiTitleIndex = {
+    titles: new Map(),
+    aliases: new Map(),
+    slugs: new Map(),
+  }
+  for (const page of store.pages) {
+    addWikiTitleIndexEntry(
+      index.titles,
+      `${page.spaceId}\u0000${page.title.trim().toLowerCase()}`,
+      page,
+    )
+    for (const alias of page.aliases ?? []) {
+      addWikiTitleIndexEntry(
+        index.aliases,
+        `${page.spaceId}\u0000${alias.trim().toLowerCase()}`,
+        page,
+      )
+    }
+    addWikiTitleIndexEntry(index.slugs, `${page.spaceId}\u0000${page.slug}`, page)
+  }
+  for (const pages of [
+    ...index.titles.values(),
+    ...index.aliases.values(),
+    ...index.slugs.values(),
+  ]) {
+    pages.sort(
+      (a, b) =>
+        Number(a.kind !== 'wiki') - Number(b.kind !== 'wiki') ||
+        a.createdAt.localeCompare(b.createdAt) ||
+        a.id.localeCompare(b.id),
+    )
+  }
+  wikiTitleIndexes.set(store, index)
+  return index
+}
+
+function resolveWikiTitle(
+  index: WikiTitleIndex,
+  spaceId: string,
+  title: string,
+): KnowledgePage | null {
+  const lowered = title.trim().toLowerCase()
+  const slug = slugifyPageTitle(title)
+  return (
+    index.titles.get(`${spaceId}\u0000${lowered}`)?.[0] ??
+    index.aliases.get(`${spaceId}\u0000${lowered}`)?.[0] ??
+    index.slugs.get(`${spaceId}\u0000${slug}`)?.[0] ??
+    null
+  )
+}
+
 export function findPageByWikiTitle(
   store: KnowledgeStore,
   spaceId: string,
   title: string,
 ): KnowledgePage | null {
-  const lowered = title.trim().toLowerCase()
-  const pages = store.pages.filter(page => page.spaceId === spaceId)
-  const exact = pages.filter(
-    page =>
-      page.title.toLowerCase() === lowered ||
-      page.aliases?.some(alias => alias.trim().toLowerCase() === lowered),
-  )
-  const slug = slugifyPageTitle(title)
-  const matches = exact.length
-    ? exact
-    : pages.filter(page => page.slug === slug)
-  return matches.length === 1 ? matches[0]! : null
+  return resolveWikiTitle(wikiTitleIndex(store), spaceId, title)
 }
 
 export function findPagePath(
@@ -948,12 +1007,13 @@ export function findWikiBacklinks(
   store: KnowledgeStore,
   targetPage: KnowledgePage,
 ): KnowledgePage[] {
+  const index = wikiTitleIndex(store)
   return store.pages.filter(page => {
     if (page.id === targetPage.id || page.spaceId !== targetPage.spaceId) {
       return false
     }
     return extractWikiLinks(page.body).some(
-      link => findPageByWikiTitle(store, page.spaceId, link)?.id === targetPage.id,
+      link => resolveWikiTitle(index, page.spaceId, link)?.id === targetPage.id,
     )
   })
 }
@@ -983,15 +1043,20 @@ export function reviewKnowledgeStore(
     store.spaces.map(space => space.rootPageId).filter(Boolean) as string[],
   )
 
+  const index = wikiTitleIndex(store)
+  const linkedPageIds = new Set<string>()
   for (const page of pages) {
     for (const link of extractWikiLinks(page.body)) {
-      if (!findPageByWikiTitle(store, spaceId, link)) {
+      const linkedPage = resolveWikiTitle(index, spaceId, link)
+      if (!linkedPage) {
         findings.push({
           kind: 'brokenLink',
           pageId: page.id,
           pageTitle: page.title,
           detail: `[[${link}]] resolves to no page`,
         })
+      } else if (linkedPage.id !== page.id) {
+        linkedPageIds.add(linkedPage.id)
       }
     }
   }
@@ -1007,7 +1072,7 @@ export function reviewKnowledgeStore(
     if (rootIds.has(page.id)) continue
     if (isKnowledgeDirectoryPage(page)) continue
     if (childCount.get(page.id)) continue
-    if (findWikiBacklinks(store, page).length === 0) {
+    if (!linkedPageIds.has(page.id)) {
       findings.push({
         kind: 'orphan',
         pageId: page.id,

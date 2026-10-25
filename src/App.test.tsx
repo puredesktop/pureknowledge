@@ -14,6 +14,10 @@ vi.mock('@purescience/platform-ui/bridge/fs', () => ({
 vi.mock('./hooks/useKnowledgeDrop', () => ({ useKnowledgeDrop: () => '' }))
 vi.mock('./lib/knowledgeDrop', () => ({ embedKnowledgeVideos: (html: string) => html }))
 vi.mock('./bridge/knowledgeAssets', () => ({ saveKnowledgeImage: vi.fn() }))
+vi.mock('./bridge/platformBridge', async importOriginal => ({
+  ...await importOriginal<typeof import('./bridge/platformBridge')>(),
+  recordOperation: vi.fn(async () => undefined),
+}))
 vi.mock('@purescience/platform-ui/components/common/containers/AppChrome', () => {
   const component = forwardRef((props: any, ref: any) => {
     const Element = props.as || 'div'
@@ -44,6 +48,7 @@ vi.mock('@purescience/platform-ui/editor', () => ({
 
 import { KnowledgePageEditor } from './App'
 import { saveKnowledgeImage } from './bridge/knowledgeAssets'
+import { recordOperation } from './bridge/platformBridge'
 import { createDefaultKnowledgeStore, createKnowledgePage } from './lib/knowledgeStore'
 import type { KnowledgePage, KnowledgeStore } from './lib/knowledgeTypes'
 
@@ -129,6 +134,11 @@ describe('KnowledgePageEditor editing reliability', () => {
 
     expect(onSave).toHaveBeenCalled()
     expect(saved.pages.find(page => page.id === first.id)?.body).toBe('Unsaved body')
+    expect(recordOperation).toHaveBeenCalledWith(expect.objectContaining({
+      lane: 'user',
+      kind: 'page.update',
+      summary: `Edited page "${first.title}"`,
+    }))
   })
 
   it('flushes an unblurred title and tags when navigation replaces the page', async () => {

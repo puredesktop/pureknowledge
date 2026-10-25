@@ -176,7 +176,18 @@
                 "type": "string"
               },
               "tags": {
-                "type": "string"
+                "description": "Tags as a comma-separated string or an array of strings.",
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                ]
               },
               "agentName": {
                 "type": "string"

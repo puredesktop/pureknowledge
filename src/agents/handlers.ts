@@ -595,7 +595,12 @@ export async function applyKnowledgeChangeHandler(
   }
   const tags = typeof args.tags === 'string'
     ? args.tags.split(',').map(tag => tag.trim()).filter(Boolean)
-    : undefined
+    : Array.isArray(args.tags)
+      ? args.tags
+          .filter((tag): tag is string => typeof tag === 'string')
+          .map(tag => tag.trim())
+          .filter(Boolean)
+      : undefined
   const links = readLinksArg(args)
   if (importAssets?.length && action !== 'create' && action !== 'update') {
     return agentToolErrorContent(

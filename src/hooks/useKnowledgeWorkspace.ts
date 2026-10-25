@@ -262,6 +262,8 @@ export function useKnowledgeWorkspace(
   const handledRef = useRef(onResourceHandled)
   handledRef.current = onResourceHandled
   const saveChainRef = useRef<Promise<void>>(Promise.resolve())
+  const saveFailedRef = useRef(saveFailed)
+  saveFailedRef.current = saveFailed
 
   // Capture the import intent before the viewport resource is cleared.
   useEffect(() => {
@@ -380,7 +382,7 @@ export function useKnowledgeWorkspace(
       workspace.durable = incoming
       workspace.local = merged?.store ?? incoming
       setStore(workspace.local)
-      if (!saveFailed) setError(null)
+      if (!saveFailedRef.current) setError(null)
       setExternalNotice(
         merged
           ? describeExternalReload(merged) ??
@@ -391,7 +393,7 @@ export function useKnowledgeWorkspace(
       if (workspaceRef.current === workspace && request === workspace.reload)
         setError(cause instanceof Error ? cause : new Error(String(cause)))
     }
-  }, [packagePath, saveFailed, workspace])
+  }, [packagePath, workspace])
 
   useEffect(() => {
     if (!externalNotice) return

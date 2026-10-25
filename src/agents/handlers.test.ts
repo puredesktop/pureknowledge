@@ -515,6 +515,17 @@ describe('applyKnowledgeChange safety', () => {
     expect(saved.pages[0]!.tags).toEqual([])
   })
 
+  it('accepts tags as a string array', async () => {
+    const store = createDefaultKnowledgeStore()
+    let saved = store
+    const result = await applyKnowledgeChangeHandler(
+      { ...contextFor(store), saveStore: async (update: typeof store | ((current: typeof store) => typeof store)) => { saved = typeof update === 'function' ? update(saved) : update } },
+      { action: 'update', page: store.pages[0]!.id, body: store.pages[0]!.body, tags: [' alpha ', 'beta', ''], summary: 'Update tags.' },
+    )
+    expect(result.content).toContain('applied')
+    expect(saved.pages[0]!.tags).toEqual(['alpha', 'beta'])
+  })
+
   it('refuses an ambiguous title instead of reading an arbitrary page', () => {
     let store = createDefaultKnowledgeStore()
     for (const body of ['First.', 'Second.']) {

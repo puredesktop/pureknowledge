@@ -2931,6 +2931,25 @@ function KnowledgeAgentReview({
   )
 }
 
+function recordKnowledgeEditSession(
+  baseline: { title: string; body: string; tags: string } | null,
+  titleDraft: string,
+  bodyDraft: string,
+  tagsDraft: string,
+): void {
+  if (!baseline) return
+  const nextTitle = titleDraft.trim() || baseline.title
+  if (nextTitle !== baseline.title) {
+    recordUserOperation(
+      'page.rename',
+      `Renamed page "${baseline.title}" to "${nextTitle}"`,
+    )
+  }
+  if (bodyDraft !== baseline.body || tagsDraft !== baseline.tags) {
+    recordUserOperation('page.update', `Edited page "${nextTitle}"`)
+  }
+}
+
 export function KnowledgePageEditor({
   packagePath,
   store,
@@ -3150,6 +3169,12 @@ export function KnowledgePageEditor({
         },
         { actor: HUMAN_ACTIVITY_ACTOR },
       ))
+      recordKnowledgeEditSession(
+        editBaselineRef.current,
+        latest.titleDraft,
+        latest.bodyDraft,
+        latest.tagsDraft,
+      )
     }
   }, [onSave, page?.id])
 
@@ -3167,9 +3192,8 @@ export function KnowledgePageEditor({
     return () => window.clearTimeout(timer)
   }, [bodyDraft, editing, onSave, page])
 
-  // Ledger baseline for one editing session: captured when editing
-  // starts, compared in finishEditing so a session records one concise
-  // operation instead of one per autosave tick.
+  // One concise ledger entry per editing session, whether it ends with
+  // Done or a navigation flush, instead of one per autosave tick.
   const editBaselineRef = useRef<{
     title: string
     body: string
@@ -3225,6 +3249,10 @@ export function KnowledgePageEditor({
         },
       }))
   }, [activeSpace.rootPageId, page, store])
+  const backlinks = useMemo(
+    () => page ? findWikiBacklinks(store, page) : [],
+    [store, page],
+  )
 
   if (!page) {
     return (
@@ -3256,22 +3284,12 @@ export function KnowledgePageEditor({
 
   const finishEditing = (): void => {
     commitPage()
-    const baseline = editBaselineRef.current
-    if (baseline) {
-      const nextTitle = titleDraft.trim() || baseline.title
-      const titleChanged = nextTitle !== baseline.title
-      const contentChanged =
-        bodyDraft !== baseline.body || tagsDraft !== baseline.tags
-      if (titleChanged) {
-        recordUserOperation(
-          'page.rename',
-          `Renamed page "${baseline.title}" to "${nextTitle}"`,
-        )
-      }
-      if (contentChanged) {
-        recordUserOperation('page.update', `Edited page "${nextTitle}"`)
-      }
-    }
+    recordKnowledgeEditSession(
+      editBaselineRef.current,
+      titleDraft,
+      bodyDraft,
+      tagsDraft,
+    )
     setEditing(false)
   }
 
@@ -3349,7 +3367,6 @@ export function KnowledgePageEditor({
       ? pagePath
       : pagePath.filter(pathPage => pathPage.id !== page.id)
   const wikiLinks = extractWikiLinks(bodyDraft)
-  const backlinks = findWikiBacklinks(store, page)
   const childPages = getChildWikiPages(store, page.id)
   const openOrCreateWikiLink = (title: string): void => {
     const existing = findPageByWikiTitle(store, page.spaceId, title)
@@ -3400,10 +3417,10 @@ export function KnowledgePageEditor({
   // Built inline it ran on every render: with images embedded as data URLs that
   // is tens of megabytes of regex and HTML work, and React then reset the whole
   // article — opening or closing the image preview took over a second.
-  // Wikilink resolution only depends on which titles exist, so the article
+  // Wikilink resolution only depends on page identity metadata, so the article
   // is not rebuilt for every save tick of the store.
   const wikiTitleKey = useMemo(
-    () => store.pages.map(candidate => `${candidate.spaceId}\u0000${candidate.title}\u0000${candidate.slug}\u0000${(candidate.aliases ?? []).join('\u0001')}`).join('\n'),
+    () => store.pages.map(candidate => `${candidate.spaceId}\u0000${candidate.title}\u0000${candidate.slug}\u0000${candidate.kind}\u0000${candidate.createdAt}\u0000${(candidate.aliases ?? []).join('\u0001')}`).join('\n'),
     [store.pages],
   )
   const renderedWikiHtml = useMemo(
@@ -3468,13 +3485,13 @@ export function KnowledgePageEditor({
       visibleDraft.page?.id === destinationPageId &&
       (!expected || visibleDraft.bodyDraft === expected.baseBody)
     ) setBodyDraft(body)
-    let applied = true
+    let applied = false
     onSave(current => {
       const destination = current.pages.find(candidate => candidate.id === destinationPageId)
       if (!destination || (expected && destination.body !== expected.baseBody)) {
-        applied = false
         return current
       }
+      applied = true
       let next = updateKnowledgePage(current, destinationPageId, { body }, { actor: HUMAN_ACTIVITY_ACTOR })
       for (const link of importedLinks) {
         if (!destination.links.some(existing => existing.path === link.path)) {
