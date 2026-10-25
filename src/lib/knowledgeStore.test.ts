@@ -3,6 +3,7 @@ import {
   addKnowledgeLink,
   acceptKnowledgeAgentChange,
   applyKnowledgeAgentChange,
+  canOpenKnowledgeLink,
   createDirectoryIndexBody,
   createDefaultKnowledgeStore,
   createKnowledgePage,
@@ -16,6 +17,7 @@ import {
   getChildWikiPages,
   isKnowledgeDirectoryPage,
   KNOWLEDGE_STALE_AFTER_DAYS,
+  manualKnowledgeLinkInput,
   migrateKnowledgeStore,
   normalizeKnowledgeLink,
   proposeKnowledgeAgentChange,
@@ -592,6 +594,37 @@ describe('knowledge store', () => {
       summary: 'Merge duplicates.',
       patch: { body: 'Merged.', mergeIntoPageId: child.id },
     })).toThrow(/descendant/)
+  })
+
+  it('builds manual links only with a target, recognizing web URLs by scheme', () => {
+    expect(manualKnowledgeLinkInput('Spec', '   ')).toBeNull()
+    expect(manualKnowledgeLinkInput('Spec', ' HTTPS://Example.test/a ')).toEqual({
+      type: 'url',
+      title: 'Spec',
+      url: 'HTTPS://Example.test/a',
+    })
+    expect(manualKnowledgeLinkInput('', ' /docs/spec.pdf ')).toEqual({
+      type: 'file',
+      title: '',
+      path: '/docs/spec.pdf',
+    })
+  })
+
+  it('refuses malformed web URLs instead of saving them as links', () => {
+    for (const target of ['https://', 'HTTPS://exa mple.test', 'http://[broken']) {
+      expect(manualKnowledgeLinkInput('Spec', target)).toBeNull()
+    }
+  })
+
+  it('opens only links with a path or valid URL', () => {
+    const resourceOnly = normalizeKnowledgeLink({ resourceId: 'res-1' })!
+    expect(canOpenKnowledgeLink(resourceOnly)).toBe(false)
+    expect(
+      canOpenKnowledgeLink(normalizeKnowledgeLink({ url: 'http://[broken' })!),
+    ).toBe(false)
+    expect(
+      canOpenKnowledgeLink(normalizeKnowledgeLink({ url: 'https://example.test' })!),
+    ).toBe(true)
   })
 })
 

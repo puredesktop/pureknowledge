@@ -96,6 +96,7 @@ import { usePureKnowledgeBoot } from './hooks/usePureKnowledgeBoot'
 import {
   acceptKnowledgeAgentChange,
   addKnowledgeLink,
+  canOpenKnowledgeLink,
   createDirectoryIndexBody,
   createKnowledgePage,
   createKnowledgeSpace,
@@ -108,6 +109,7 @@ import {
   getChildWikiPages,
   getWikiPagesForSpace,
   isKnowledgeDirectoryPage,
+  manualKnowledgeLinkInput,
   rankKnowledgePages,
   rejectKnowledgeAgentChange,
   updateKnowledgePage,
@@ -3311,18 +3313,14 @@ export function KnowledgePageEditor({
     )
   }
 
+  const pendingLink = manualKnowledgeLinkInput(linkTitle, linkPath)
   const addLink = (event: FormEvent): void => {
     event.preventDefault()
-    if (!linkPath.trim() && !linkTitle.trim()) return
+    if (!pendingLink) return
     onSave(current => addKnowledgeLink(
       current,
       page.id,
-      {
-        type: linkPath.startsWith('http') ? 'url' : 'file',
-        title: linkTitle,
-        path: linkPath.startsWith('http') ? undefined : linkPath,
-        url: linkPath.startsWith('http') ? linkPath : undefined,
-      },
+      pendingLink,
       { actor: HUMAN_ACTIVITY_ACTOR },
     ))
     recordUserOperation(
@@ -3999,7 +3997,17 @@ export function KnowledgePageEditor({
                     placeholder="Path or URL"
                     onChange={event => setLinkPath(event.target.value)}
                   />
-                  <Button variant="subtle" size="sm" type="submit">
+                  <Button
+                    variant="subtle"
+                    size="sm"
+                    type="submit"
+                    disabled={!pendingLink}
+                    title={
+                      linkPath.trim() && !pendingLink
+                        ? 'This web address is not valid'
+                        : undefined
+                    }
+                  >
                     Link
                   </Button>
                 </StyledQuietForm>
@@ -4173,6 +4181,7 @@ function KnowledgeLinkRow({
 }: {
   link: KnowledgeLink
 }): React.ReactElement {
+  const openable = canOpenKnowledgeLink(link)
   const openLink = (): void => {
     if (link.path) {
       void catalogOpen({
@@ -4193,7 +4202,17 @@ function KnowledgeLinkRow({
         <strong>{link.title}</strong>
         <StyledSubtle>{link.path || link.url || link.resourceId}</StyledSubtle>
       </div>
-      <Button variant="subtle" size="sm" onClick={openLink}>
+      <Button
+        variant="subtle"
+        size="sm"
+        onClick={openLink}
+        disabled={!openable}
+        title={
+          openable
+            ? undefined
+            : 'This link has no file path or valid web address, so it cannot be opened from here'
+        }
+      >
         Open
       </Button>
     </StyledLinkRow>
@@ -4202,7 +4221,7 @@ function KnowledgeLinkRow({
 
 export function App(): React.ReactElement {
   const { error: bridgeError, ready, meta } = usePlatformBridge()
-  const { boot, bootError, booting } = usePureKnowledgeBoot(ready)
+  const { boot, bootError, booting, retry } = usePureKnowledgeBoot(ready)
   const { resource: viewportResource, clearResource } =
     usePlatformViewportResource(ready, meta)
 
@@ -4234,6 +4253,7 @@ export function App(): React.ReactElement {
             tone={bootError ? 'error' : 'neutral'}
             title={bootError ? 'Boot failed' : 'pure knowledge'}
             message={message}
+            action={bootError ? { label: 'Retry', onClick: retry } : undefined}
           />
         </AppShell>
       </AppFrame>

@@ -49,7 +49,7 @@ vi.mock('@purescience/platform-ui/editor', () => ({
 import { KnowledgePageEditor } from './App'
 import { saveKnowledgeImage } from './bridge/knowledgeAssets'
 import { recordOperation } from './bridge/platformBridge'
-import { createDefaultKnowledgeStore, createKnowledgePage } from './lib/knowledgeStore'
+import { createDefaultKnowledgeStore, createKnowledgePage, updateKnowledgePage } from './lib/knowledgeStore'
 import type { KnowledgePage, KnowledgeStore } from './lib/knowledgeTypes'
 
 const roots = new Set<Root>()
@@ -111,6 +111,50 @@ afterEach(async () => {
 })
 
 describe('KnowledgePageEditor editing reliability', () => {
+  it('validates manual links and adds them without overwriting newer page edits', async () => {
+    const store = createDefaultKnowledgeStore()
+    const page = store.pages[0]!
+    let saved = store
+    const onSave = vi.fn((update: KnowledgeStore | ((current: KnowledgeStore) => KnowledgeStore)) => {
+      saved = typeof update === 'function' ? update(saved) : update
+    })
+    await renderEditor(store, page, onSave)
+    await act(async () => { button('Edit page').click() })
+    const title = container.querySelector<HTMLInputElement>('input[placeholder="Link title"]')!
+    const target = container.querySelector<HTMLInputElement>('input[placeholder="Path or URL"]')!
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    const setInput = async (input: HTMLInputElement, value: string) => {
+      setValue.call(input, value)
+      await act(async () => { input.dispatchEvent(new Event('input', { bubbles: true })) })
+    }
+    const submit = async () => {
+      await act(async () => {
+        target.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      })
+    }
+
+    await setInput(title, 'Spec')
+    for (const value of ['   ', 'HTTPS://exa mple.test']) {
+      await setInput(target, value)
+      expect(button('Link').disabled).toBe(true)
+      await submit()
+      expect(onSave).not.toHaveBeenCalled()
+    }
+
+    await setInput(target, ' HTTPS://Example.test/a ')
+    expect(button('Link').disabled).toBe(false)
+    // A write arrived after the editor rendered its store snapshot.
+    saved = updateKnowledgePage(saved, page.id, { body: 'Newer page content' })
+    await submit()
+
+    const updated = saved.pages.find(candidate => candidate.id === page.id)!
+    expect(updated.body).toBe('Newer page content')
+    expect(updated.links).toHaveLength(page.links.length + 1)
+    expect(updated.links).toContainEqual(expect.objectContaining({
+      type: 'url', title: 'Spec', url: 'HTTPS://Example.test/a',
+    }))
+  })
+
   it('flushes a pending body edit when navigation replaces the page', async () => {
     let store = createDefaultKnowledgeStore()
     const first = store.pages[0]!
