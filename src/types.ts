@@ -15,6 +15,7 @@ export interface PlatformAppSettingsUpdateRequest {
 }
 
 export interface KnowledgeBootState {
+  organisation?: {id:string;folder:string}|null
   prefs: ShellPreferences
   appSettings: KnowledgeAppSettings
 }

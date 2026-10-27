@@ -4,6 +4,7 @@ import { knowledgePackageBaseName } from './knowledgePaths'
 import { KNOWLEDGE_INDEX_FILE, KNOWLEDGE_PAGES_DIR } from './knowledgePages'
 
 export interface KnowledgePackageManifest {
+  organisationId?: string
   schemaVersion: 1
   appId: 'pureknowledge'
   slug: typeof KNOWLEDGE_APP_SLUG
@@ -38,6 +39,7 @@ export function createKnowledgePackageManifest(
 
   return {
     schemaVersion: 1,
+    ...(store.organisationId ? { organisationId: store.organisationId } : {}),
     appId: 'pureknowledge',
     slug: KNOWLEDGE_APP_SLUG,
     kind: 'knowledge',

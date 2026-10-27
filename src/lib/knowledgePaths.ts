@@ -126,7 +126,13 @@ export function resolveKnowledgeWorkspaceTarget(
   resourcePath: string | null | undefined,
   settingsStorePath: string | null | undefined,
   workingDirectory: string,
+  organisation?: {id:string;folder:string}|null,
 ): KnowledgeWorkspaceTarget {
+  if(organisation) {
+    const packagePath=`${trimTrailingSlash(organisation.folder)}/Knowledge/Organisation.knowledge`
+    if(resourcePath && trimTrailingSlash(resourcePath)!==packagePath) throw Error('This desk is bound to one organisation’s knowledge library. Open personal or other organisation libraries from their own context.')
+    return {packagePath,importFilePath:null}
+  }
   if (resourcePath && isKnowledgeImportFilePath(resourcePath)) {
     return {
       packagePath: normalizeKnowledgePackagePath(

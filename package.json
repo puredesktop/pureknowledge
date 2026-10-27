@@ -3,6 +3,14 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "exports": {
+    "./organisationKnowledge": "./src/lib/organisationKnowledge.mjs",
+    "./organisationKnowledge.mjs": "./src/lib/organisationKnowledge.mjs",
+    "./createOrganisationKnowledge": "./src/lib/createOrganisationKnowledge.ts",
+    "./knowledgePages": "./src/lib/knowledgePages.ts",
+    "./knowledgeStore": "./src/lib/knowledgeStore.ts",
+    "./knowledgePackage": "./src/lib/knowledgePackage.ts"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",

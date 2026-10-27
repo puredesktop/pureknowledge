@@ -6,6 +6,8 @@ import {
   writePlatformFileBinary,
 } from '@purescience/platform-ui/bridge/fs'
 import { KNOWLEDGE_APP_SLUG } from '../constants'
+import { readPlatformStorageJson } from '@purescience/platform-ui/bridge/storage'
+import { listPlatformFiles } from '@purescience/platform-ui/bridge/fs'
 import type {
   KnowledgeAppSettings,
   PlatformAppSettingsUpdateRequest,
@@ -13,6 +15,27 @@ import type {
 } from '../types'
 
 export { bridge }
+
+/** The host's actual workspace, never a model-supplied org id or global setting. */
+export async function fetchOrganisationBinding(): Promise<{id:string;folder:string}|null> {
+  const stored=await readPlatformStorageJson({appSlug:KNOWLEDGE_APP_SLUG,fileName:'knowledge.json'})
+  const folder=stored.path?.replace(/\\/g,'/').match(/^(.*)\/\.appdata\/[^/]+$/)?.[1]
+  if(!folder) throw Error('The host did not identify this knowledge workspace.')
+  let raw:string
+  try {raw=await readTextFile(`${folder}/.appdata/executive/org.md`)}
+  catch(cause) {
+    // Only a confirmed absence means a personal desk. Denial/transport errors
+    // must never silently open its global personal library.
+    const parent=await listPlatformFiles(`${folder}/.appdata`)
+    if(!parent.entries.some(e=>e.name==='executive')) return null
+    const records=await listPlatformFiles(`${folder}/.appdata/executive`)
+    if(!records.entries.some(e=>e.name==='org.md')) return null
+    throw cause
+  }
+  const id=/^id:\s*["']?([a-z0-9-]+)["']?\s*$/m.exec(raw)?.[1]
+  if(!id) throw Error('The organisation identity needs repair before its knowledge can open.')
+  return {id,folder}
+}
 
 export async function fetchShellPreferences(): Promise<ShellPreferences> {
   return getPlatformPreferences() as Promise<ShellPreferences>
