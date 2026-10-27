@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useKnowledgeWorkspace } from './useKnowledgeWorkspace'
 import {
   createDefaultKnowledgeStore,
+  createKnowledgePage,
   updateKnowledgePage,
 } from '../lib/knowledgeStore'
 import {
@@ -455,4 +456,22 @@ describe('knowledge workspace reliability', () => {
     expect(current.store!.pages[0]!.title).toBe('Committed title')
     expect(current.store!.activePageId).toBeNull()
   })
+})
+
+it('persists guidance and explicit checks in page files across workspace reloads without changing identity', async () => {
+  const seeded = seed(A, 'Guidance')
+  const id = seeded.pages[0]!.id
+  const check = { actorType: 'human' as const, actorName: 'You', at: '2026-10-01T00:00:00.000Z' }
+  await render()
+  await act(async () => { await current.saveStore(store => createKnowledgePage(store, { spaceId: store.activeSpaceId, kind: 'wiki', title: 'Replacement instructions', body: 'New guidance' })) })
+  const replacementId = current.store!.activePageId!
+  for (const patch of [{ guidanceStatus: 'draft' as const }, { lastChecked: check }, { body: 'Retained instructions' }, { guidanceStatus: 'current' as const }, { guidanceStatus: 'retired' as const }, { replacementPageId: replacementId }]) {
+    await act(async () => { await current.saveStore(store => updateKnowledgePage(store, id, patch)) })
+  }
+  await act(async () => { root.unmount() })
+  roots.delete(root)
+  root = undefined as unknown as Root
+  await render()
+  expect(current.store!.pages.find(page => page.id === id)).toMatchObject({ id, guidanceStatus: 'retired', lastChecked: check, replacementPageId: replacementId, body: 'Retained instructions' })
+  expect(current.store!.pages.find(page => page.id === replacementId)?.body).toBe('New guidance')
 })

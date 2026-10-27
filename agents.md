@@ -183,3 +183,28 @@ rejecting legacy agent proposals; and an agent-lane entry for every
 `applyKnowledgeChange` write, carrying the agent's name and one-line
 summary. The ledger is the canonical record for the PureAssistant tab;
 the in-package activity feed stays as in-app history only.
+
+## Manual guidance status and checks
+
+Guidance metadata is optional. Unmarked pages remain ordinary notes/pages;
+never enrol them implicitly. `guidanceStatus` is `draft`, `current`, or
+`retired`. Current records a judgement, not automatic correctness.
+`lastChecked` contains `actorType`, `actorName`, and ISO UTC `at`.
+`replacementPageId` is an exact stable page ID in the bound notebook, including
+its other accessible spaces; titles and slugs are not replacement identities.
+
+Context, page and search reads include these fields and a status label. Search
+accepts `status: all | unmarked | draft | current | retired`, ranks matching
+Current guidance first, then Draft, unmarked and Retired, preserving relevance
+(or empty-query recency) within each group. It never inserts nonmatching pages.
+
+Use `applyKnowledgeChange` with an existing `page` and a `summary`:
+- `action: guidance`, `guidanceStatus` and/or `replacementPageId`; null clears
+  either field. Missing, inaccessible and self-replacement targets are rejected.
+- `action: check`, `checkedAt` (ISO UTC date/time), and `agentName` explicitly
+  records an agent check. It cannot attribute the check to a human.
+
+Ordinary content edits, saves, status/replacement changes and reads preserve
+lastChecked. UI checks use the existing human identity “You”; only Record check
+updates the record. Retirement retains the page, content and existing links;
+opening a retired page never redirects. Follow its replacement separately.

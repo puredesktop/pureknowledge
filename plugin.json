@@ -47,7 +47,7 @@
         {
           "name": "searchKnowledge",
           "risk": "read",
-          "description": "Search the knowledge base across titles, aliases, tags, page bodies, slugs, wikilinks, and resource links \u2014 the same ranking the sidebar search uses. Empty query lists the most recently updated pages plus the space overview. getKnowledgeContext names the active space.",
+          "description": "Search the knowledge base across titles, aliases, tags, page bodies, slugs, wikilinks, and resource links \u2014 the same ranking the sidebar search uses. Empty query lists pages plus the space overview. Matching Current guidance ranks first; relevance (or recency for an empty query) is retained within each status group. getKnowledgeContext names the active space.",
           "requiresApproval": false,
           "inputSchema": {
             "type": "object",
@@ -61,6 +61,17 @@
               "space": {
                 "type": "string",
                 "description": "Limit results to one space, by id or name. listSpaces names them."
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "all",
+                  "unmarked",
+                  "draft",
+                  "current",
+                  "retired"
+                ],
+                "description": "Optional guidance status filter. Current matching guidance ranks first; retired pages remain available."
               }
             }
           }
@@ -157,7 +168,7 @@
         {
           "name": "applyKnowledgeChange",
           "risk": "destructive",
-          "description": "Write a change to the wiki directly: create a page, update, rename, promote a note to wiki, merge into another page, or delete. Body is markdown; [[Page name]] creates wikilinks. importAssets copies up to 100 local images into the package and appends portable inline Markdown. Every write is recorded in the agent log with before/after and in the suite operations ledger. Call getKnowledgeContext first to ground the space and page.",
+          "description": "Write a change to the wiki directly: create a page, update, rename, promote a note to wiki, merge into another page, or delete. Body is markdown; [[Page name]] creates wikilinks. importAssets copies up to 100 local images into the package and appends portable inline Markdown. Every write is recorded in the agent log with before/after and in the suite operations ledger. Call getKnowledgeContext first to ground the space and page. Explicit action guidance changes guidanceStatus (draft/current/retired or null to clear) and replacementPageId (exact existing page ID in this notebook or null). Explicit action check records checkedAt (ISO UTC date/time) attributed to the named agent, never a human. Content edits never refresh lastChecked. Current is a recorded judgement, not automatic correctness.",
           "requiresApproval": true,
           "inputSchema": {
             "type": "object",
@@ -210,7 +221,9 @@
                   "rename",
                   "promote",
                   "delete",
-                  "merge"
+                  "merge",
+                  "guidance",
+                  "check"
                 ],
                 "description": "What to write. Defaults to update when page names an existing page, create otherwise. rename needs the new title; promote turns a note into a wiki page; merge needs into (the surviving page) and body (its merged content); delete removes the page (and its children)."
               },
@@ -274,6 +287,28 @@
                     "sourcePath"
                   ]
                 }
+              },
+              "guidanceStatus": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  "draft",
+                  "current",
+                  "retired",
+                  null
+                ]
+              },
+              "replacementPageId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "checkedAt": {
+                "type": "string",
+                "description": "Explicit check time, ISO UTC date/time, for action check only."
               }
             },
             "required": [

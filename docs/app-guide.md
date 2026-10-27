@@ -53,3 +53,27 @@ For developer access, app submissions, or marketplace questions, contact [info@p
 ## Contributing
 
 We welcome pull requests, bug reports, new features, and documentation improvements. You may modify and distribute this app under its applicable licenses. See [CONTRIBUTING.md](../CONTRIBUTING.md), [LICENSE](../LICENSE), and [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+
+## See which guidance is current
+
+Open any page and expand **Guidance** below its title. Use **Status** to
+choose Draft, Current or Retired, or Unmarked to keep it an ordinary page.
+No status or check is required for notes, including existing pages.
+
+**Record check** explicitly records **You** as the human reviewer and the
+selected date (stored and displayed in UTC). Agents can explicitly record their
+own checks and are labelled as agents. Editing or saving content, changing
+status, or selecting a replacement never changes the recorded check. Current
+is a recorded judgement, not automatic confirmation of correctness.
+
+The **Replacement** menu selects an existing page by stable identity in this
+notebook. All its spaces are accessible under the existing notebook rules.
+Retired pages keep their content and existing links, and display a prominent
+**Open replacement** button. If the target becomes unavailable, the original
+page says so and remains readable; it never substitutes a page with a similar
+title or redirects automatically.
+
+Search shows status, check attribution/date and replacement identity. Matching
+Current guidance appears first, followed by Draft, unmarked and Retired pages;
+relevance is preserved within each group. **Status filter** can show any group,
+including Retired, without a text query.
