@@ -61,7 +61,7 @@ choose Draft, Current or Retired, or Unmarked to keep it an ordinary page.
 No status or check is required for notes, including existing pages.
 
 **Record check** explicitly records **You** as the human reviewer and the
-selected date (stored and displayed in UTC). Agents can explicitly record their
+selected local calendar date (stored as a UTC date marker and displayed without a time). Agents can explicitly record their
 own checks and are labelled as agents. Editing or saving content, changing
 status, or selecting a replacement never changes the recorded check. Current
 is a recorded judgement, not automatic confirmation of correctness.

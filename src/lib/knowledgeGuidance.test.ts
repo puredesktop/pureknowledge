@@ -15,6 +15,8 @@ import {
   GUIDANCE_FILTERS,
   guidanceMetadata,
   replacementFor,
+  localCheckDate,
+  formatKnowledgeCheck,
 } from './knowledgeGuidance'
 import type { KnowledgeStore } from './knowledgeTypes'
 
@@ -200,5 +202,44 @@ describe('guidance search', () => {
       ids.legacy,
     )
     expect(JSON.stringify(store)).toBe(before)
+  })
+})
+
+it('guards hand-edited optional metadata without losing the page or rewriting its saved fields', () => {
+  const { store } = guidanceFixture()
+  const raw = {
+    ...store.pages[0]!,
+    guidanceStatus: 'invented',
+    lastChecked: { actorType: 'human', actorName: 42, at: 'not-a-date' },
+  }
+  const saved = serializePageFile(raw as never)
+  const page = parsePageFile(saved)!
+  expect(page.id).toBe(raw.id)
+  expect(guidanceMetadata(page)).toMatchObject({
+    guidanceStatus: null,
+    statusLabel: 'Unknown status',
+    lastChecked: null,
+    lastCheckedUnavailable: true,
+  })
+  expect(serializePageFile(page)).toBe(saved)
+  expect(localCheckDate(new Date(2026, 9, 27, 1, 15))).toBe('2026-10-27')
+  expect(
+    formatKnowledgeCheck({
+      actorType: 'agent',
+      actorName: 'Steward',
+      at: '2026-10-27T09:00:00.000Z',
+    }),
+  ).toContain('Steward (agent)')
+})
+
+it('treats non-string hand-edited statuses as unknown instead of coercing them', () => {
+  const { store } = guidanceFixture()
+  const page = {
+    ...store.pages[0]!,
+    guidanceStatus: { toString: null },
+  } as never
+  expect(guidanceMetadata(page)).toMatchObject({
+    guidanceStatus: null,
+    statusLabel: 'Unknown status',
   })
 })

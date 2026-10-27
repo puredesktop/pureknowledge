@@ -442,14 +442,14 @@ export function reviewKnowledgeHandler(
 }
 
 const PROPOSAL_ACTIONS = [
-  'guidance',
-  'check',
   'create',
   'update',
   'rename',
   'promote',
   'delete',
   'merge',
+  'guidance',
+  'check',
 ] as const
 type ProposalAction = (typeof PROPOSAL_ACTIONS)[number]
 

@@ -8,6 +8,9 @@ import {
   type GuidanceFilter,
   GUIDANCE_LABELS,
   guidanceMetadata,
+  guidanceFilterLabel,
+  localCheckDate,
+  formatKnowledgeCheck,
   replacementFor,
   validateGuidancePatch,
   type GuidancePatch,
@@ -15,7 +18,7 @@ import {
 import { updateKnowledgePage } from '../lib/knowledgeStore'
 import type { KnowledgePage, KnowledgeStore } from '../lib/knowledgeTypes'
 import type { KnowledgeStoreUpdate } from '../hooks/useKnowledgeWorkspace'
-import { recordOperation } from '../bridge/platformBridge'
+import { recordUserOperation } from '../bridge/knowledgeOperations'
 
 const Panel = styled.section`
   margin: 12px 0 20px;
@@ -50,10 +53,10 @@ export function GuidanceDetails({
 }: {
   page: KnowledgePage
   store: KnowledgeStore
-  onSave: (update: KnowledgeStoreUpdate) => void
+  onSave: (update: KnowledgeStoreUpdate) => void | Promise<void>
   onSelectPage: (id: string) => void
 }) {
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
+  const [date, setDate] = useState(() => localCheckDate())
   const [error, setError] = useState('')
   const target = replacementFor(store, page)
   const metadata = guidanceMetadata(page)
@@ -74,36 +77,25 @@ export function GuidanceDetails({
     )
     return ambiguous ? `${label} · ${candidate.id}` : label
   }
-  const apply = (patch: GuidancePatch, summary: string) => {
+  const apply = async (patch: GuidancePatch, summary: string) => {
     try {
       validateGuidancePatch(store, page, patch)
       setError('')
-      onSave((current) => {
-        try {
-          if (!current.pages.some((candidate) => candidate.id === page.id)) {
-            throw new Error(
-              'This page is no longer available in this notebook.',
-            )
-          }
-          const next = updateKnowledgePage(current, page.id, patch, {
-            actor: { type: 'human', name: 'You' },
-          })
-          if (next !== current) {
-            void recordOperation({
-              lane: 'user',
-              kind: 'page.updated',
-              appSlug: 'knowledge',
-              summary,
-              refs: { resourceId: page.id },
-            }).catch(() => undefined)
-          }
-          return next
-        } catch (cause) {
-          // The current store may differ from the menu's render snapshot.
-          setError(cause instanceof Error ? cause.message : String(cause))
-          throw cause
+      let changed = false
+      await onSave((current) => {
+        if (!current.pages.some((candidate) => candidate.id === page.id)) {
+          throw new Error('This page is no longer available in this notebook.')
         }
+        const next = updateKnowledgePage(current, page.id, patch, {
+          actor: { type: 'human', name: 'You' },
+        })
+        changed = next !== current
+        return next
       })
+      if (changed)
+        recordUserOperation('page.update', summary, {
+          refs: { resourceId: page.id },
+        })
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     }
@@ -136,14 +128,10 @@ export function GuidanceDetails({
       )}
       <div>
         {metadata.statusLabel}
-        {page.lastChecked
-          ? ` · Last checked by ${page.lastChecked.actorName} (${
-              page.lastChecked.actorType
-            }) · ${
-              new Date(page.lastChecked.at).toLocaleString(undefined, {
-                timeZone: 'UTC',
-              }) + ' UTC'
-            }`
+        {metadata.lastChecked
+          ? ` · Last checked by ${formatKnowledgeCheck(metadata.lastChecked)}`
+          : page.lastChecked
+          ? ' · Last check unavailable'
           : page.guidanceStatus
           ? ' · No check recorded'
           : ''}
@@ -239,22 +227,27 @@ export function GuidanceDetails({
   )
 }
 
-export function GuidanceSearchDetails({ page }: { page: KnowledgePage }) {
+export function GuidanceSearchDetails({
+  page,
+  store,
+}: {
+  page: KnowledgePage
+  store: KnowledgeStore
+}) {
   const metadata = guidanceMetadata(page)
+  const target = replacementFor(store, page)
   return (
-    <small>
+    <small data-replacement-page-id={target?.id}>
       {metadata.statusLabel}
-      {page.lastChecked
-        ? ` · Checked by ${page.lastChecked.actorName} (${
-            page.lastChecked.actorType
-          }) · ${
-            new Date(page.lastChecked.at).toLocaleString(undefined, {
-              timeZone: 'UTC',
-            }) + ' UTC'
-          }`
+      {metadata.lastChecked
+        ? ` · Checked by ${formatKnowledgeCheck(metadata.lastChecked)}`
+        : page.lastChecked
+        ? ' · Last check unavailable'
         : ''}
       {page.replacementPageId
-        ? ` · Replacement: ${page.replacementPageId}`
+        ? target
+          ? ` · Replacement: ${target.title}`
+          : ' · Replacement unavailable'
         : ''}
     </small>
   )
@@ -269,21 +262,10 @@ export function GuidanceStatusFilter({
 }) {
   return (
     <MenuButtonDropdown
-      label={`Status filter: ${
-        value === 'all'
-          ? 'All pages'
-          : value === 'unmarked'
-          ? 'Unmarked'
-          : GUIDANCE_LABELS[value]
-      }`}
+      label={`Status filter: ${guidanceFilterLabel(value)}`}
       items={GUIDANCE_FILTERS.map((id) => ({
         id,
-        label:
-          id === 'all'
-            ? 'All pages'
-            : id === 'unmarked'
-            ? 'Unmarked'
-            : GUIDANCE_LABELS[id],
+        label: guidanceFilterLabel(id),
       }))}
       onSelectItem={({ id }) => onChange(id as GuidanceFilter)}
     />

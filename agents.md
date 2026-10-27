@@ -201,7 +201,7 @@ Current guidance first, then Draft, unmarked and Retired, preserving relevance
 Use `applyKnowledgeChange` with an existing `page` and a `summary`:
 - `action: guidance`, `guidanceStatus` and/or `replacementPageId`; null clears
   either field. Missing, inaccessible and self-replacement targets are rejected.
-- `action: check`, `checkedAt` (ISO UTC date/time), and `agentName` explicitly
+- `action: check`, `checkedAt` (ISO UTC date/time), and optional `agentName` (defaults to `Assistant`) explicitly
   records an agent check. It cannot attribute the check to a human.
 
 Ordinary content edits, saves, status/replacement changes and reads preserve

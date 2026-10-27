@@ -114,7 +114,7 @@ it('registers matching page/context/search reads and renders their metadata and 
         <div aria-label="Results">
           {hits.map((hit) => (
             <div data-page-id={hit.page.id} key={hit.page.id}>
-              <GuidanceSearchDetails page={hit.page} />
+              <GuidanceSearchDetails page={hit.page} store={store} />
             </div>
           ))}
         </div>
@@ -136,7 +136,7 @@ it('registers matching page/context/search reads and renders their metadata and 
       metadata,
     )
     expect(host.textContent).toContain('Retired guidance')
-    expect(host.textContent).toContain('Last checked by You (human)')
+    expect(host.textContent).toContain('Last checked by You')
     expect(host.textContent).toContain('2026')
     expect(host.textContent).toContain('Open replacement: Guide current')
     for (const [filter, label] of [
@@ -178,7 +178,7 @@ it('registers matching page/context/search reads and renders their metadata and 
         ])
         expect(
           host.querySelector('[aria-label="Results"]')?.textContent,
-        ).toContain('Retired · Checked by You (human)')
+        ).toContain('Retired · Checked by You')
       }
     }
     expect(JSON.stringify(store)).toBe(snapshot)

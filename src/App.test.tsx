@@ -52,6 +52,7 @@ import { KnowledgePageEditor, KnowledgeWorkspace } from './App'
 import { saveKnowledgeImage } from './bridge/knowledgeAssets'
 import { recordOperation } from './bridge/platformBridge'
 import { createDefaultKnowledgeStore, createKnowledgePage, createKnowledgeSpace, updateKnowledgePage } from './lib/knowledgeStore'
+import { GuidanceSearchDetails } from './components/KnowledgeGuidance'
 import { useKnowledgeWorkspace } from './hooks/useKnowledgeWorkspace'
 import type { KnowledgePage, KnowledgeStore } from './lib/knowledgeTypes'
 
@@ -113,6 +114,7 @@ afterEach(async () => {
   roots.clear()
   document.body.innerHTML = ''
   vi.clearAllMocks()
+  vi.useRealTimers()
 })
 
 describe('KnowledgePageEditor editing reliability', () => {
@@ -443,6 +445,9 @@ it('uses the actual sidebar search and filters, retaining retired page identity 
   const retired = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(node => node.textContent?.trim() === 'Retired')!
   await act(async () => { retired.click() })
   expect(resultButtons().map(node => node.getAttribute('data-agent-label'))).toEqual(['Sidebar retired'])
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'missing guide')
+  await act(async () => { input.dispatchEvent(new Event('input', { bubbles: true })) })
+  expect(container.querySelector('[role="status"]')?.textContent).toBe('No pages match “missing guide” (Retired).')
 })
 
 it('reports a stale replacement selection locally without a saved change or success ledger entry', async () => {
@@ -452,9 +457,8 @@ it('reports a stale replacement selection locally without a saved change or succ
   const targetId = store.activePageId!
   let current = { ...store, pages: store.pages.filter(page => page.id !== targetId) }
   const snapshot = JSON.stringify(current)
-  const save = (update: KnowledgeStore | ((current: KnowledgeStore) => KnowledgeStore)) => {
-    // Like the workspace mutation adapter, a rejected update does not publish a store.
-    try { current = typeof update === 'function' ? update(current) : update } catch { /* surfaced by guidance panel */ }
+  const save = async (update: KnowledgeStore | ((current: KnowledgeStore) => KnowledgeStore)) => {
+    current = typeof update === 'function' ? update(current) : update
   }
   await renderEditor(store, original, save)
   vi.mocked(recordOperation).mockClear()
@@ -482,4 +486,77 @@ it('disambiguates replacement pages with identical titles using stable identitie
   expect(chosen).toBeTruthy()
   await act(async () => { chosen.click() })
   expect(store.pages.find(page => page.id === source.id)?.replacementPageId).toBe(second)
+})
+
+
+it('records guidance page.update only after the save resolves, and never after a rejected write', async () => {
+  const store = createDefaultKnowledgeStore()
+  const page = store.pages[0]!
+  let release!: () => void
+  let fail!: (error: Error) => void
+  let gate = new Promise<void>((resolve, reject) => { release = resolve; fail = reject })
+  const save = vi.fn(async (update: KnowledgeStore | ((current: KnowledgeStore) => KnowledgeStore)) => {
+    if (typeof update === 'function') update(store)
+    await gate
+  })
+  const render = async () => {
+    await act(async () => { root.render(<KnowledgePageEditor packagePath="/fixture.knowledge" store={store} activeSpace={store.spaces[0]!} page={page} saving={false} onSelectPage={() => undefined} onSave={() => undefined} onSaveGuidance={save} editRequest={null} />) })
+  }
+  const chooseCurrent = async () => {
+    await act(async () => { container.querySelector('details')!.open = true; button('Status: Unmarked').click() })
+    const option = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(item => item.textContent?.trim() === 'Current')!
+    await act(async () => { option.click() })
+  }
+  await render()
+  await chooseCurrent()
+  expect(save).toHaveBeenCalledTimes(1)
+  expect(recordOperation).not.toHaveBeenCalled()
+  await act(async () => { release() })
+  expect(recordOperation).toHaveBeenCalledTimes(1)
+  expect(recordOperation).toHaveBeenCalledWith(expect.objectContaining({ lane: 'user', kind: 'page.update', appSlug: 'knowledge', refs: { resourceId: page.id } }))
+  vi.mocked(recordOperation).mockClear()
+  gate = new Promise<void>((resolve, reject) => { release = resolve; fail = reject })
+  await chooseCurrent()
+  await act(async () => { fail(new Error('Disk unavailable')) })
+  expect(recordOperation).not.toHaveBeenCalled()
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe('Disk unavailable')
+})
+
+it('defaults human checks to the local calendar day and displays a date without human/type/time clutter', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime(new Date(2026, 9, 27, 1, 15))
+  let store = createDefaultKnowledgeStore()
+  const id = store.pages[0]!.id
+  const save = (update: KnowledgeStore | ((current: KnowledgeStore) => KnowledgeStore)) => { store = typeof update === 'function' ? update(store) : update }
+  await renderEditor(store, store.pages[0]!, save)
+  const date = container.querySelector<HTMLInputElement>('input[aria-label="Check date"]')!
+  expect(date.value).toBe('2026-10-27')
+  await act(async () => { date.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
+  await renderEditor(store, store.pages.find(page => page.id === id)!, save)
+  expect(store.pages[0]!.lastChecked?.at).toBe('2026-10-27T00:00:00.000Z')
+  expect(container.textContent).toContain('Last checked by You')
+  expect(container.textContent).not.toContain('(human)')
+  expect(container.textContent).not.toContain('UTC')
+  expect(container.textContent).not.toContain('12:00')
+})
+
+it('shows replacement titles or unavailable text in search and guards malformed optional metadata', async () => {
+  let store = createDefaultKnowledgeStore()
+  const oldId = store.pages[0]!.id
+  store = createKnowledgePage(store, { spaceId: store.activeSpaceId, kind: 'wiki', title: 'Replacement title' })
+  const targetId = store.activePageId!
+  store = updateKnowledgePage(store, oldId, { guidanceStatus: 'retired', replacementPageId: targetId })
+  const page = store.pages.find(page => page.id === oldId)!
+  await act(async () => { root.render(<GuidanceSearchDetails page={page} store={store} />) })
+  expect(container.textContent).toContain('Replacement: Replacement title')
+  expect(container.textContent).not.toContain(targetId)
+  expect(container.querySelector('small')?.getAttribute('data-replacement-page-id')).toBe(targetId)
+  store = { ...store, pages: store.pages.filter(page => page.id !== targetId) }
+  await act(async () => { root.render(<GuidanceSearchDetails page={page} store={store} />) })
+  expect(container.textContent).toContain('Replacement unavailable')
+  const malformed = { ...page, guidanceStatus: 'invented', lastChecked: { actorType: 'human', actorName: 'You', at: 'bad date' } } as unknown as KnowledgePage
+  await renderEditor({ ...store, pages: [malformed] }, malformed, () => undefined)
+  expect(container.textContent).toContain('Unknown status')
+  expect(container.textContent).toContain('Last check unavailable')
+  expect(container.textContent).not.toContain('Invalid Date')
 })

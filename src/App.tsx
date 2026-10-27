@@ -1,5 +1,6 @@
+import { recordUserOperation } from './bridge/knowledgeOperations'
 import { GuidanceDetails, GuidanceSearchDetails, GuidanceStatusFilter } from './components/KnowledgeGuidance'
-import type { GuidanceFilter } from './lib/knowledgeGuidance'
+import { guidanceFilterLabel, type GuidanceFilter } from './lib/knowledgeGuidance'
 import { MenuButtonDropdown } from '@purescience/platform-ui/components/common/dropdown/MenuButtonDropdown'
 import { CollectionImage } from '@purescience/platform-editor/extensions/collectionImage.ts'
 import { useKnowledgeDrop } from './hooks/useKnowledgeDrop'
@@ -127,25 +128,6 @@ import type {
 import type { KnowledgeBootState } from './types'
 
 const HUMAN_ACTIVITY_ACTOR = { type: 'human' as const, name: 'You' }
-
-/**
- * Operations-ledger helper: every meaningful user interaction records
- * here after its store mutation succeeds (playbook rule). Agent-lane
- * writes record in the applyKnowledgeChange handler.
- */
-function recordUserOperation(
-  kind: string,
-  summary: string,
-  extra?: Partial<Pick<PlatformOperationInput, 'detail' | 'refs'>>,
-): void {
-  void recordOperation({
-    lane: 'user',
-    kind,
-    appSlug: KNOWLEDGE_APP_SLUG,
-    summary,
-    ...extra,
-  }).catch(() => undefined)
-}
 
 /** Sentinel breadcrumb path for the space root (pages use their ids). */
 const SPACE_ROOT_CRUMB = '__space-root__'
@@ -2553,14 +2535,14 @@ export function KnowledgeWorkspace({
               </Button>
             </StyledSmallComposer>
           ) : null}
-          {query.trim() || statusFilter !== 'all' ? visiblePages.map(result => (
+          {query.trim() || statusFilter !== 'all' ? visiblePages.length ? visiblePages.map(result => (
             <StyledTreeItem key={result.id}>
               <StyledSearchResult type="button" {...agentRefs(result)} aria-current={activePage?.id === result.id ? 'page' : undefined} onClick={() => selectPage(result.id)}>
                 <span>{result.title}</span>
-                <GuidanceSearchDetails page={result} />
+                <GuidanceSearchDetails page={result} store={store} />
               </StyledSearchResult>
             </StyledTreeItem>
-          )) : <>
+          )) : <StyledSubtle role="status">No pages match{query.trim() ? ` “${query.trim()}”` : ''} ({guidanceFilterLabel(statusFilter)}).</StyledSubtle> : <>
           {(() => {
             const rootPage = activeSpace.rootPageId
               ? store.pages.find(
@@ -2752,6 +2734,7 @@ export function KnowledgeWorkspace({
         saving={saving}
         onSelectPage={selectPage}
         onSave={mutate}
+        onSaveGuidance={saveStore}
         editRequest={editRequest}
       />
       {deleteCandidate ? (
@@ -2988,6 +2971,7 @@ export function KnowledgePageEditor({
   saving,
   onSelectPage,
   onSave,
+  onSaveGuidance = onSave,
   editRequest,
 }: {
   packagePath: string
@@ -2997,6 +2981,7 @@ export function KnowledgePageEditor({
   saving: boolean
   onSelectPage: (pageId: string) => void
   onSave: (update: KnowledgeStoreUpdate) => void
+  onSaveGuidance?: (update: KnowledgeStoreUpdate) => void | Promise<void>
   editRequest: { pageId: string; nonce: number } | null
 }): React.ReactElement {
   const [titleDraft, setTitleDraft] = useState('')
@@ -3761,7 +3746,7 @@ export function KnowledgePageEditor({
                 </StyledReadTitle>
               )}
             </StyledWikiPageHeader>
-            <GuidanceDetails key={page.id} page={page} store={store} onSave={onSave} onSelectPage={onSelectPage} />
+            <GuidanceDetails key={page.id} page={page} store={store} onSave={onSaveGuidance} onSelectPage={onSelectPage} />
             {dropError && <p role="alert">{dropError}</p>}
             {galleryError && <p role="alert">{galleryError}</p>}
             {imageFailures.length ? (
