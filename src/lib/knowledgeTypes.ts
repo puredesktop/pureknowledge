@@ -19,6 +19,14 @@ export interface KnowledgeLink {
   url?: string
 }
 
+export type GuidanceStatus = 'draft' | 'current' | 'retired'
+
+export interface KnowledgeCheck {
+  actorType: 'human' | 'agent'
+  actorName: string
+  at: string
+}
+
 export interface KnowledgePage {
   id: string
   spaceId: string
@@ -32,6 +40,9 @@ export interface KnowledgePage {
   aliases?: string[]
   createdAt: string
   updatedAt: string
+  guidanceStatus?: GuidanceStatus
+  lastChecked?: KnowledgeCheck
+  replacementPageId?: string | null
   promotedAt?: string
 }
 
@@ -83,6 +94,9 @@ export interface KnowledgeAgentChangePatch {
   parentId?: string | null
   link?: Partial<KnowledgeLink>
   links?: Partial<KnowledgeLink>[]
+  guidanceStatus?: GuidanceStatus | null
+  lastChecked?: KnowledgeCheck
+  replacementPageId?: string | null
   /** page.merge: the surviving page the source page merges into. */
   mergeIntoPageId?: string
 }

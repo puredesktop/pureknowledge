@@ -1,3 +1,4 @@
+import { guidanceMetadata, GUIDANCE_FILTERS, type GuidanceFilter, type GuidancePatch } from '../lib/knowledgeGuidance'
 import {
   agentToolErrorContent,
   formatAgentToolJson,
@@ -155,7 +156,7 @@ export function getKnowledgeContextHandler(
         ? { id: activeSpace.id, name: activeSpace.name }
         : null,
       activePage: activePage
-        ? { id: activePage.id, title: activePage.title, kind: activePage.kind }
+        ? { id: activePage.id, title: activePage.title, kind: activePage.kind, ...guidanceMetadata(activePage) }
         : null,
       totalPages: store.pages.length,
       wikiPages: store.pages.filter(page => page.kind === 'wiki').length,
@@ -195,13 +196,15 @@ export function searchKnowledgeHandler(
     typeof rawLimit === 'number' && Number.isFinite(rawLimit)
       ? Math.max(1, Math.min(25, Math.floor(rawLimit)))
       : 10
-  const hits = rankKnowledgePages(store, query, limit)
+  if (args.status !== undefined && !GUIDANCE_FILTERS.includes(args.status as GuidanceFilter)) return agentToolErrorContent('status must be all, unmarked, draft, current or retired.')
+  const hits = rankKnowledgePages(store, query, limit, args.status as GuidanceFilter | undefined)
   return {
     content: formatAgentToolJson({
       query: query || null,
       totalPages: store.pages.length,
       spaces: store.spaces.map(space => ({ id: space.id, name: space.name })),
       pages: hits.map(hit => ({
+        ...guidanceMetadata(hit.page),
         id: hit.page.id,
         title: hit.page.title,
         kind: hit.page.kind,
@@ -212,7 +215,7 @@ export function searchKnowledgeHandler(
       })),
       note: query
         ? 'Read a page in full with readKnowledgePage.'
-        : 'No query given — these are the most recently updated pages.',
+        : 'No query given — Current guidance first, then other status groups, newest within each group.',
     }),
   }
 }
@@ -245,6 +248,7 @@ export function readKnowledgePageHandler(
       kind: page.kind,
       spaceId: page.spaceId,
       tags: page.tags,
+      ...guidanceMetadata(page),
       aliases: page.aliases ?? [],
       links: page.links,
       updatedAt: page.updatedAt,
@@ -444,6 +448,8 @@ const PROPOSAL_ACTIONS = [
   'promote',
   'delete',
   'merge',
+  'guidance',
+  'check',
 ] as const
 type ProposalAction = (typeof PROPOSAL_ACTIONS)[number]
 
@@ -495,6 +501,30 @@ export async function applyKnowledgeChangeHandler(
     return agentToolErrorContent(
       `"${existing?.title}" is a space root and cannot be deleted or merged away.`,
     )
+  }
+
+  if (action === 'guidance' || action === 'check') {
+    const agentName = readAgentToolStringArg(args, 'agentName')?.trim() || 'Assistant'
+    const patch: GuidancePatch = action === 'check'
+      ? { lastChecked: { actorType: 'agent', actorName: agentName, at: args.checkedAt as string } }
+      : {
+          ...(args.guidanceStatus !== undefined ? { guidanceStatus: args.guidanceStatus as GuidancePatch['guidanceStatus'] } : {}),
+          ...(args.replacementPageId !== undefined ? { replacementPageId: args.replacementPageId as string | null } : {}),
+        }
+    if (action === 'guidance' && !Object.keys(patch).length) return agentToolErrorContent('Pass guidanceStatus or replacementPageId (null clears it).')
+    try {
+      await context.saveStore(current => {
+        const page = current.pages.find(candidate => candidate.id === existing!.id)
+        if (!page) throw new Error('Page no longer available; search again.')
+        return applyKnowledgeAgentChange(current, {
+          spaceId: page.spaceId, pageId: page.id, agentName, changeType: 'page.update', title: page.title,
+          summary: summary.trim(), before: JSON.stringify(guidanceMetadata(page)),
+          after: JSON.stringify({ ...guidanceMetadata(page), ...patch }), patch,
+        })
+      })
+      void recordOperation({ lane: 'agent', kind: 'knowledge.page.update', appSlug: KNOWLEDGE_APP_SLUG, summary: `${agentName}: ${summary.trim()}` }).catch(() => undefined)
+      return { content: formatAgentToolJson({ applied: action, pageId: existing!.id }) }
+    } catch (error) { return agentToolErrorContent(error instanceof Error ? error.message : String(error)) }
   }
 
   const body = readAgentToolStringArg(args, 'body')
