@@ -2,6 +2,8 @@ import { MenuButtonDropdown } from '@purescience/platform-ui/components/common/d
 import { CollectionImage } from '@purescience/platform-editor/extensions/collectionImage.ts'
 import { useKnowledgeDrop } from './hooks/useKnowledgeDrop'
 import { embedKnowledgeVideos } from './lib/knowledgeDrop'
+import { PolicyPanel } from './components/PolicyPanel'
+import { PagePlacement } from './components/PagePlacement'
 import {
   prepareKnowledgeDocumentHtml,
   prepareKnowledgeDocumentHtmlWithUrls,
@@ -2433,6 +2435,7 @@ function KnowledgeWorkspace({
         >
           {saving ? 'Saving…' : error ? (saveFailed ? 'Save failed' : 'Needs attention') : 'Saved'}
         </StyledSavedDot>
+        {store.organisationId&&<StyledSubtle>Private organisation library</StyledSubtle>}
         {saveFailed && !saving ? (
           <Button
             variant="subtle"
@@ -2822,7 +2825,7 @@ function KnowledgeAgentReview({
         <Heading level={1}>Agent log</Heading>
         <StyledSubtle>
           {pendingChanges.length
-            ? `${pendingChanges.length} legacy proposals still waiting for ${activeSpace.name}`
+            ? `${pendingChanges.length} proposed edits waiting for ${activeSpace.name}`
             : changes.length
               ? `${changes.length} agent changes recorded for ${activeSpace.name}`
               : `No agent changes recorded for ${activeSpace.name}`}
@@ -3965,8 +3968,10 @@ export function KnowledgePageEditor({
               </StyledWikiIndex>
             ) : null}
 
+            <PolicyPanel page={page} editing={editing} onChange={changed=>onSave(current=>{const live=current.pages.find(p=>p.id===page.id);if(JSON.stringify(live)!==JSON.stringify(page))throw Error('This policy changed. Read its current wording before publishing.');return updateKnowledgePage(current,page.id,{governance:changed.governance},{actor:HUMAN_ACTIVITY_ACTOR})})}/>
             {editing ? (
               <StyledPageMetadataPanel>
+                <PagePlacement page={page} store={store} onChange={parentId=>onSave(current=>updateKnowledgePage(current,page.id,{parentId},{actor:HUMAN_ACTIVITY_ACTOR}))}/>
                 <StyledFieldLabel htmlFor="page-tags">Tags</StyledFieldLabel>
                 <StyledTagFieldLane>
                   <TextField

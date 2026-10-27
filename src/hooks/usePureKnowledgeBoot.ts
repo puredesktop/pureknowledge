@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   fetchKnowledgeSettings,
   fetchShellPreferences,
+  fetchOrganisationBinding,
 } from '../bridge/platformBridge'
 import type { KnowledgeBootState } from '../types'
 
@@ -30,11 +31,12 @@ export function usePureKnowledgeBoot(
       setBooting(true)
       setBootError(null)
       try {
-        const [prefs, appSettings] = await Promise.all([
+        const [prefs, appSettings, organisation] = await Promise.all([
           fetchShellPreferences(),
           fetchKnowledgeSettings(),
+          fetchOrganisationBinding(),
         ])
-        if (!cancelled) setBoot({ prefs, appSettings })
+        if (!cancelled) setBoot({ prefs, appSettings, organisation })
       } catch (error) {
         if (!cancelled) {
           setBoot(null)

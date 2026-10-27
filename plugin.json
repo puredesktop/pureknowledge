@@ -61,6 +61,10 @@
               "space": {
                 "type": "string",
                 "description": "Limit results to one space, by id or name. listSpaces names them."
+              },
+              "includeDrafts": {
+                "type": "boolean",
+                "description": "Explicitly inspect working policy drafts. False/default reads only human-published policy text; drafts are not company policy."
               }
             }
           }
@@ -89,6 +93,10 @@
                 "type": "integer",
                 "minimum": 1,
                 "description": "Optional: return at most this many characters of the body."
+              },
+              "includeDrafts": {
+                "type": "boolean",
+                "description": "Explicitly inspect working policy drafts. False/default reads only human-published policy text; drafts are not company policy."
               }
             },
             "required": [

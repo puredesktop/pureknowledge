@@ -3,12 +3,14 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  fetchOrganisationBinding,
   fetchKnowledgeSettings,
   fetchShellPreferences,
 } from '../bridge/platformBridge'
 import { usePureKnowledgeBoot } from './usePureKnowledgeBoot'
 
 vi.mock('../bridge/platformBridge', () => ({
+  fetchOrganisationBinding: vi.fn().mockResolvedValue(null),
   fetchKnowledgeSettings: vi.fn(),
   fetchShellPreferences: vi.fn(),
 }))
@@ -28,6 +30,7 @@ beforeEach(() => {
     globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
   ).IS_REACT_ACT_ENVIRONMENT = true
   root = createRoot(document.createElement('div'))
+  vi.mocked(fetchOrganisationBinding).mockResolvedValue(null)
   vi.mocked(fetchShellPreferences).mockResolvedValue(prefs)
   vi.mocked(fetchKnowledgeSettings).mockResolvedValue(appSettings)
 })
@@ -54,7 +57,7 @@ describe('usePureKnowledgeBoot', () => {
     expect(current.booting).toBe(false)
 
     await act(async () => current.retry())
-    expect(current.boot).toEqual({ prefs, appSettings })
+    expect(current.boot).toEqual({ prefs, appSettings, organisation: null })
     expect(current.bootError).toBeNull()
     expect(current.booting).toBe(false)
     expect(fetchShellPreferences).toHaveBeenCalledTimes(3)
@@ -86,7 +89,7 @@ describe('usePureKnowledgeBoot', () => {
       expect(current.boot).toBeNull()
 
       await act(async () => resolve(appSettings))
-      expect(current.boot).toEqual({ prefs, appSettings })
+      expect(current.boot).toEqual({ prefs, appSettings, organisation: null })
       expect(current.bootError).toBeNull()
       expect(current.booting).toBe(false)
       expect(fetchShellPreferences).toHaveBeenCalledTimes(2)

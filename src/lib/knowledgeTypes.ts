@@ -20,6 +20,14 @@ export interface KnowledgeLink {
 }
 
 export interface KnowledgePage {
+  governance?: {
+    category: 'policy' | 'procedure' | 'reference' | 'decision'
+    owner?: string
+    reviewDue?: string
+    sources?: string[]
+    archived?: boolean
+    publication?: { content: string; by: string; at: string }
+  }
   id: string
   spaceId: string
   parentId: string | null
@@ -88,6 +96,8 @@ export interface KnowledgeAgentChangePatch {
 }
 
 export interface KnowledgeAgentChange {
+  /** Exact baseline for reviewed organisation changes; refuses stale acceptance. */
+  expectedPage?: string
   id: string
   spaceId: string
   pageId?: string
@@ -107,6 +117,8 @@ export interface KnowledgeAgentChange {
 }
 
 export interface KnowledgeStore {
+  /** One physical package belongs to one organisation; spaces are not ACLs. */
+  organisationId?: string
   schemaVersion: 1
   spaces: KnowledgeSpace[]
   pages: KnowledgePage[]

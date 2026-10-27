@@ -33,6 +33,7 @@ const FRONTMATTER_OPEN = '---\n'
 const FRONTMATTER_CLOSE = '\n---\n'
 
 export interface KnowledgeIndexFile {
+  organisationId?: string
   schemaVersion: 2
   activeSpaceId: string | null
   activePageId: string | null
@@ -89,6 +90,7 @@ export function parsePageFile(raw: string): KnowledgePage | null {
 
 export function serializeKnowledgeIndex(store: KnowledgeStore): string {
   const index: KnowledgeIndexFile = {
+    ...(store.organisationId ? { organisationId: store.organisationId } : {}),
     schemaVersion: 2,
     activeSpaceId: store.activeSpaceId ?? null,
     activePageId: store.activePageId ?? null,
@@ -121,6 +123,7 @@ export function assembleKnowledgeStore(
 ): KnowledgeStore {
   return {
     schemaVersion: 1,
+    ...(index.organisationId ? { organisationId: index.organisationId } : {}),
     spaces: index.spaces,
     // Older writers left the previous filename behind after a rename. These
     // files share an identity: choose the newest content, independent of listing
