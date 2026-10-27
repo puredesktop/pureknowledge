@@ -33,6 +33,7 @@ interface KnowledgeMutationOptions {
 }
 
 export interface ProposeKnowledgeAgentChangeInput {
+  expectedPage?: string
   spaceId: string
   pageId?: string
   agentName: string
@@ -267,6 +268,7 @@ export function migrateKnowledgeStore(
 
   return {
     schemaVersion: SCHEMA_VERSION,
+    ...(typeof input.organisationId === 'string' ? { organisationId: input.organisationId } : {}),
     spaces,
     pages,
     activity: Array.isArray(input.activity) ? input.activity : [],
@@ -343,6 +345,7 @@ export function createKnowledgePage(
 
   const at = now()
   const page: KnowledgePage = {
+    ...(input.tags?.includes('policy') || store.pages.find(p => p.id === input.parentId)?.tags.includes('policy-directory') ? { governance: { category: 'policy' as const } } : {}),
     id: createId('page'),
     spaceId: input.spaceId,
     parentId: input.parentId ?? null,
@@ -378,7 +381,7 @@ export function updateKnowledgePage(
   store: KnowledgeStore,
   pageId: string,
   patch: Partial<
-    Pick<KnowledgePage, 'title' | 'body' | 'tags' | 'kind' | 'parentId'>
+    Pick<KnowledgePage, 'title' | 'body' | 'tags' | 'kind' | 'parentId' | 'governance'>
   > & GuidancePatch,
   options: KnowledgeMutationOptions = {},
 ): KnowledgeStore {
@@ -390,6 +393,7 @@ export function updateKnowledgePage(
   const tags = patch.tags ?? page.tags
   const kind = patch.kind ?? page.kind
   const parentId = patch.parentId === undefined ? page.parentId : patch.parentId
+  const governance = patch.governance ?? page.governance ?? (store.pages.find(p=>p.id===parentId)?.tags.includes('policy-directory') ? {category:'policy' as const} : undefined)
   const isSpaceRoot = store.spaces.some(space => space.rootPageId === pageId)
   if (parentId !== page.parentId && wouldCreateParentCycle(store, pageId, parentId)) {
     throw new Error(`"${page.title}" cannot be filed under itself or one of its own pages.`)
@@ -414,6 +418,7 @@ export function updateKnowledgePage(
     parentId === page.parentId &&
     tags.length === page.tags.length &&
     tags.every((tag, index) => tag === page.tags[index])
+    && JSON.stringify(governance) === JSON.stringify(page.governance)
   ) {
     return store
   }
@@ -425,6 +430,7 @@ export function updateKnowledgePage(
     ...(guidanceStatus === undefined ? {} : { guidanceStatus: guidanceStatus ?? undefined }),
     ...(lastChecked === undefined ? {} : { lastChecked }),
     ...(replacementPageId === undefined ? {} : { replacementPageId }),
+    ...(governance ? {governance} : {}),
     title,
     body,
     tags,
@@ -449,7 +455,7 @@ export function updateKnowledgePage(
         promoted ? 'page.promoted' : 'page.updated',
         promoted
           ? `Promoted ${nextPage.title} to wiki`
-          : `Updated ${nextPage.title}`,
+          : patch.governance?.publication?.at && patch.governance.publication.at!==page.governance?.publication?.at ? `Published policy ${nextPage.title}` : `Updated ${nextPage.title}`,
         nextPage.id,
         options.actor,
       ),
@@ -676,10 +682,8 @@ export function rankKnowledgePages(
 }
 
 /**
- * LEGACY(review-queue) — production code no longer proposes: agent writes
- * go through applyKnowledgeAgentChange (direct write + log entry). This
- * stays only so existing 'pending' entries keep their Accept/Reject flow
- * and so tests can build them. Do not add new call sites.
+ * Organisation curation uses reviewed proposals; personal libraries retain
+ * their existing direct-write agent model. Both share the same page mutations.
  */
 export function proposeKnowledgeAgentChange(
   store: KnowledgeStore,
@@ -691,6 +695,7 @@ export function proposeKnowledgeAgentChange(
 
   const at = now()
   const change: KnowledgeAgentChange = {
+    ...(input.expectedPage ? {expectedPage:input.expectedPage} : {}),
     id: createId('agent-change'),
     spaceId: input.spaceId,
     pageId: input.pageId,
@@ -825,6 +830,9 @@ export function acceptKnowledgeAgentChange(
     candidate => candidate.id === changeId,
   )
   if (!change || change.status !== 'pending') return store
+
+  if(change.expectedPage && JSON.stringify(store.pages.find(p=>p.id===change.pageId))!==change.expectedPage) throw Error('This page changed after the proposal. Ask for an updated proposal; current wording was preserved.')
+  if(change.changeType==='page.create' && store.pages.some(p=>p.spaceId===change.spaceId && p.title.trim().toLocaleLowerCase()===(change.patch.title??change.title).trim().toLocaleLowerCase())) throw Error('A page with that title now exists. Update it instead of accepting a duplicate.')
 
   const nextStore = applyAgentChangeToPages(store, change)
 

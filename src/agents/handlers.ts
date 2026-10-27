@@ -11,6 +11,7 @@ import {
   type KnowledgeImageImport,
 } from '../bridge/knowledgeAssets'
 import { KNOWLEDGE_APP_SLUG } from '../constants'
+import { effectiveKnowledgePage, isPolicy, knowledgeStatus } from '../lib/organisationKnowledge.mjs'
 import {
   applyKnowledgeAgentChange,
   findWikiBacklinks,
@@ -152,6 +153,7 @@ export function getKnowledgeContextHandler(
   return {
     content: formatAgentToolJson({
       storePath: context.storePath,
+      organisationId: store.organisationId ?? null,
       activeSpace: activeSpace
         ? { id: activeSpace.id, name: activeSpace.name }
         : null,
@@ -197,7 +199,8 @@ export function searchKnowledgeHandler(
       ? Math.max(1, Math.min(25, Math.floor(rawLimit)))
       : 10
   if (args.status !== undefined && !GUIDANCE_FILTERS.includes(args.status as GuidanceFilter)) return agentToolErrorContent('status must be all, unmarked, draft, current or retired.')
-  const hits = rankKnowledgePages(store, query, limit, args.status as GuidanceFilter | undefined)
+  const effectiveStore={...store,pages:store.pages.filter(p=>!p.governance?.archived).map(p=>effectiveKnowledgePage(p,args.includeDrafts===true)).filter((p):p is KnowledgePage=>p!==null)}
+  const hits = rankKnowledgePages(effectiveStore, query, limit, args.status as GuidanceFilter | undefined)
   return {
     content: formatAgentToolJson({
       query: query || null,
@@ -239,18 +242,21 @@ export function readKnowledgePageHandler(
       `No page matching "${ref}". searchKnowledge finds pages by content.`,
     )
   }
-  const part = readPagePart(page.body, args)
+  const effective=effectiveKnowledgePage(page,args.includeDrafts===true)
+  if(!effective) return agentToolErrorContent('This is an unpublished policy draft. Request includeDrafts to review it; it is not company policy.')
+  const part = readPagePart(effective.body, args)
   if ('error' in part) return agentToolErrorContent(part.error)
   return {
     content: formatAgentToolJson({
       id: page.id,
-      title: page.title,
-      kind: page.kind,
+      status: knowledgeStatus(page),
+      title: effective.title,
+      kind: effective.kind,
       spaceId: page.spaceId,
-      tags: page.tags,
+      tags: effective.tags,
       ...guidanceMetadata(page),
       aliases: page.aliases ?? [],
-      links: page.links,
+      links: effective.links,
       updatedAt: page.updatedAt,
       backlinks: findWikiBacklinks(store, page).map(source => ({
         id: source.id,
@@ -497,6 +503,7 @@ export async function applyKnowledgeChangeHandler(
   const existingIsRoot = existing
     ? store.spaces.some(space => space.rootPageId === existing.id)
     : false
+  if(existing && isPolicy(existing) && (action==='merge'||action==='delete')) return agentToolErrorContent('Policy removal or merging is a human action. Propose the change in the conversation; retain its published history.')
   if (existingIsRoot && (action === 'delete' || action === 'merge')) {
     return agentToolErrorContent(
       `"${existing?.title}" is a space root and cannot be deleted or merged away.`,

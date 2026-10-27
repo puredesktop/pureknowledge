@@ -52,6 +52,7 @@ import {
   type KnowledgeIndexFile,
 } from '../lib/knowledgePages'
 import { KNOWLEDGE_APP_SLUG } from '../constants'
+import { validateOrganisationLibrary } from '../lib/organisationKnowledge.mjs'
 
 export type KnowledgeStoreUpdate =
   | KnowledgeStore
@@ -162,6 +163,9 @@ async function readKnowledgePagesLayout(
   const indexRaw = await readOptionalFile(indexPath)
   if (indexRaw === null) return null
   const index = JSON.parse(indexRaw) as KnowledgeIndexFile
+  const manifestRaw = await readOptionalFile(resolveKnowledgeManifestPath(packagePath))
+  const manifest = manifestRaw ? JSON.parse(manifestRaw) : null
+  if (index.organisationId || manifest?.organisationId) validateOrganisationLibrary(index, manifest, index.organisationId || manifest.organisationId)
   if (
     index.schemaVersion !== 2 ||
     !Array.isArray(index.spaces) ||
@@ -225,13 +229,14 @@ export function useKnowledgeWorkspace(
       resourcePath,
       boundPackageRef.current ?? boot.appSettings.storePath,
       boot.prefs.workingDirectory,
+      boot.organisation,
     )
     // Clearing a handled resource is not an instruction to reopen the boot
     // package. Imports likewise belong to the currently bound knowledge base.
     if (resourcePath && !target.importFilePath)
       boundPackageRef.current = target.packagePath
     return target
-  }, [boot.appSettings.storePath, boot.prefs.workingDirectory, resourcePath])
+  }, [boot.appSettings.storePath, boot.prefs.workingDirectory, boot.organisation, resourcePath])
   const storePath = packagePath
   const [store, setStore] = useState<KnowledgeStore | null>(null)
   const [loading, setLoading] = useState(true)
@@ -287,6 +292,7 @@ export function useKnowledgeWorkspace(
           packagePath,
         )
         if (!nextStore) {
+          if(boot.organisation) throw Error('Create this organisation’s knowledge library from its Knowledge workspace first. No personal library was opened or imported.')
           // Migration: split whichever legacy blob exists into the
           // page-per-file layout, keeping the blob as a backup.
           const storeFilePath = resolveKnowledgeStoreFilePath(packagePath)
@@ -321,7 +327,8 @@ export function useKnowledgeWorkspace(
           }
         }
         if (cancelled) return
-        await updateKnowledgeSettings({ storePath: packagePath })
+        if(boot.organisation && nextStore.organisationId!==boot.organisation.id) throw Error('This library is not bound to the host organisation.')
+        if (!nextStore.organisationId) await updateKnowledgeSettings({ storePath: packagePath })
         if (cancelled) return
         if (!importFilePath) handledRef.current?.()
         if (!cancelled) {
@@ -427,6 +434,7 @@ export function useKnowledgeWorkspace(
         throw new Error('The knowledge workspace is not ready to save.')
       const nextStore =
         typeof update === 'function' ? update(workspace.local) : update
+      if (nextStore.organisationId !== workspace.local.organisationId) throw new Error('A library cannot change its organisation binding.')
       workspace.local = nextStore
       ++workspace.revision
       ++workspace.pending
@@ -437,7 +445,7 @@ export function useKnowledgeWorkspace(
         // Diff against acknowledged disk state, never optimistic UI state.
         await writeKnowledgePages(packagePath, workspace.durable, nextStore)
         workspace.durable = nextStore
-        if (workspaceRef.current === workspace)
+        if (workspaceRef.current === workspace && !nextStore.organisationId)
           await updateKnowledgeSettings({
             storePath: packagePath,
             activeSpaceId: nextStore.activeSpaceId,
