@@ -546,6 +546,33 @@ describe('applyKnowledgeChange safety', () => {
 
 
 describe('guidance agent parity and writes', () => {
+  it('defaults an unnamed check to Assistant and keeps its attribution in the log', async () => {
+    let store = createDefaultKnowledgeStore()
+    const id = store.pages[0]!.id
+    const context = contextFor(store)
+    context.saveStore = async update => {
+      store = typeof update === 'function' ? update(store) : update
+      context.store = store
+    }
+    const result = await applyKnowledgeChangeHandler(context, {
+      action: 'check', page: id, checkedAt: '2026-10-27T09:00:00.000Z',
+      summary: 'Record the guidance review',
+    })
+    expect(result.isError).not.toBe(true)
+    expect(store.pages.find(page => page.id === id)?.lastChecked).toEqual({
+      actorType: 'agent', actorName: 'Assistant', at: '2026-10-27T09:00:00.000Z',
+    })
+    expect(store.agentChanges?.[0]?.agentName).toBe('Assistant')
+  })
+
+  it('preserves the established action order in invalid-action help', async () => {
+    const result = await applyKnowledgeChangeHandler(contextFor(createDefaultKnowledgeStore()), {
+      action: 'unknown', summary: 'Explain supported actions',
+    })
+    expect(result.isError).toBe(true)
+    expect(result.content).toContain('create, update, rename, promote, delete, merge, guidance, check')
+  })
+
   it('returns identical metadata from context/page/search and preserves human checks on ordinary agent edits', async () => {
     let store = createDefaultKnowledgeStore()
     const id = store.pages[0]!.id

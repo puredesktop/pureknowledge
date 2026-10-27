@@ -201,7 +201,8 @@
                 ]
               },
               "agentName": {
-                "type": "string"
+                "type": "string",
+                "description": "Agent attribution for the change. For action check, defaults to Assistant when omitted; the check always records an agent, never a human."
               },
               "parent": {
                 "type": "string"
