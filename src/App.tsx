@@ -1,3 +1,6 @@
+import { recordUserOperation } from './bridge/knowledgeOperations'
+import { GuidanceDetails, GuidanceSearchDetails, GuidanceStatusFilter } from './components/KnowledgeGuidance'
+import { guidanceFilterLabel, type GuidanceFilter } from './lib/knowledgeGuidance'
 import { MenuButtonDropdown } from '@purescience/platform-ui/components/common/dropdown/MenuButtonDropdown'
 import { CollectionImage } from '@purescience/platform-editor/extensions/collectionImage.ts'
 import { useKnowledgeDrop } from './hooks/useKnowledgeDrop'
@@ -125,25 +128,6 @@ import type {
 import type { KnowledgeBootState } from './types'
 
 const HUMAN_ACTIVITY_ACTOR = { type: 'human' as const, name: 'You' }
-
-/**
- * Operations-ledger helper: every meaningful user interaction records
- * here after its store mutation succeeds (playbook rule). Agent-lane
- * writes record in the applyKnowledgeChange handler.
- */
-function recordUserOperation(
-  kind: string,
-  summary: string,
-  extra?: Partial<Pick<PlatformOperationInput, 'detail' | 'refs'>>,
-): void {
-  void recordOperation({
-    lane: 'user',
-    kind,
-    appSlug: KNOWLEDGE_APP_SLUG,
-    summary,
-    ...extra,
-  }).catch(() => undefined)
-}
 
 /** Sentinel breadcrumb path for the space root (pages use their ids). */
 const SPACE_ROOT_CRUMB = '__space-root__'
@@ -398,6 +382,9 @@ const StyledTagFieldLane = styled.div`
 
 const StyledSearch = styled.div`
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  > :first-child { width: 100%; min-width: 0; }
   gap: var(--pureknowledge-space-sm);
   padding: var(--pureknowledge-space-md) var(--pureknowledge-space-lg);
   border-bottom: 1px solid var(--pureknowledge-border);
@@ -517,6 +504,18 @@ const StyledPageSelect = styled.button`
   &:focus {
     outline: none;
   }
+`
+
+const StyledSearchResult = styled(StyledPageSelect)`
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+  &:hover { background: var(--pure-chrome-hover); }
+  &:focus-visible { outline: 2px solid currentColor; }
+  > span { display: block; font-weight: 500; margin-bottom: 4px; }
+  > small { display: block; color: var(--pure-chrome-tertiary); line-height: 1.5; }
 `
 
 const StyledPageTitle = styled.div`
@@ -2013,7 +2012,7 @@ function buildWikiRows(
   return rows
 }
 
-function KnowledgeWorkspace({
+export function KnowledgeWorkspace({
   boot,
   resourcePath,
   onResourceHandled,
@@ -2026,6 +2025,7 @@ function KnowledgeWorkspace({
     useKnowledgeWorkspace(boot, resourcePath, onResourceHandled)
   useKnowledgeAgentTools(true, { store, saveStore, storePath })
   const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState<GuidanceFilter>('all')
   const [spaceMenuOpen, setSpaceMenuOpen] = useState(false)
   const [deleteCandidate, setDeleteCandidate] = useState<KnowledgePage | null>(
     null,
@@ -2082,13 +2082,13 @@ function KnowledgeWorkspace({
 
   const visiblePages = useMemo(() => {
     if (!store || !activeSpace) return []
-    const pages = query.trim()
-      ? rankKnowledgePages(store, query, store.pages.length).map(
+    const pages = query.trim() || statusFilter !== 'all'
+      ? rankKnowledgePages(store, query, store.pages.length, statusFilter).map(
           hit => hit.page,
         )
       : store.pages
     return pages.filter(page => page.spaceId === activeSpace.id)
-  }, [activeSpace, query, store])
+  }, [activeSpace, query, statusFilter, store])
 
   const wikiPages = useMemo(() => {
     if (!store || !activeSpace) return []
@@ -2471,6 +2471,7 @@ function KnowledgeWorkspace({
             onValueChange={setQuery}
             onClear={() => setQuery('')}
           />
+          <GuidanceStatusFilter value={statusFilter} onChange={setStatusFilter} />
         </StyledSearch>
         <StyledPageList>
           <StyledTreeHeading>
@@ -2534,6 +2535,14 @@ function KnowledgeWorkspace({
               </Button>
             </StyledSmallComposer>
           ) : null}
+          {query.trim() || statusFilter !== 'all' ? visiblePages.length ? visiblePages.map(result => (
+            <StyledTreeItem key={result.id}>
+              <StyledSearchResult type="button" {...agentRefs(result)} aria-current={activePage?.id === result.id ? 'page' : undefined} onClick={() => selectPage(result.id)}>
+                <span>{result.title}</span>
+                <GuidanceSearchDetails page={result} store={store} />
+              </StyledSearchResult>
+            </StyledTreeItem>
+          )) : <StyledSubtle role="status">No pages match{query.trim() ? ` “${query.trim()}”` : ''} ({guidanceFilterLabel(statusFilter)}).</StyledSubtle> : <>
           {(() => {
             const rootPage = activeSpace.rootPageId
               ? store.pages.find(
@@ -2713,6 +2722,7 @@ function KnowledgeWorkspace({
                 : null}
             </StyledNotesSection>
           ) : null}
+          </>}
         </StyledPageList>
       </StyledSidebar>
 
@@ -2724,6 +2734,7 @@ function KnowledgeWorkspace({
         saving={saving}
         onSelectPage={selectPage}
         onSave={mutate}
+        onSaveGuidance={saveStore}
         editRequest={editRequest}
       />
       {deleteCandidate ? (
@@ -2960,6 +2971,7 @@ export function KnowledgePageEditor({
   saving,
   onSelectPage,
   onSave,
+  onSaveGuidance = onSave,
   editRequest,
 }: {
   packagePath: string
@@ -2969,6 +2981,7 @@ export function KnowledgePageEditor({
   saving: boolean
   onSelectPage: (pageId: string) => void
   onSave: (update: KnowledgeStoreUpdate) => void
+  onSaveGuidance?: (update: KnowledgeStoreUpdate) => void | Promise<void>
   editRequest: { pageId: string; nonce: number } | null
 }): React.ReactElement {
   const [titleDraft, setTitleDraft] = useState('')
@@ -3733,6 +3746,7 @@ export function KnowledgePageEditor({
                 </StyledReadTitle>
               )}
             </StyledWikiPageHeader>
+            <GuidanceDetails key={page.id} page={page} store={store} onSave={onSaveGuidance} onSelectPage={onSelectPage} />
             {dropError && <p role="alert">{dropError}</p>}
             {galleryError && <p role="alert">{galleryError}</p>}
             {imageFailures.length ? (

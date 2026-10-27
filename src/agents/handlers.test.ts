@@ -19,6 +19,7 @@ import type { KnowledgeAgentToolContext } from './catalog'
 import {
   createDefaultKnowledgeStore,
   createKnowledgePage,
+  updateKnowledgePage,
 } from '../lib/knowledgeStore'
 
 function contextFor(
@@ -540,5 +541,66 @@ describe('applyKnowledgeChange safety', () => {
     const result = readKnowledgePageHandler(contextFor(store), { page: 'Duplicate' })
     expect(result.content).toContain('multiple pages')
     expect(result.content).toContain('page id')
+  })
+})
+
+
+describe('guidance agent parity and writes', () => {
+  it('defaults an unnamed check to Assistant and keeps its attribution in the log', async () => {
+    let store = createDefaultKnowledgeStore()
+    const id = store.pages[0]!.id
+    const context = contextFor(store)
+    context.saveStore = async update => {
+      store = typeof update === 'function' ? update(store) : update
+      context.store = store
+    }
+    const result = await applyKnowledgeChangeHandler(context, {
+      action: 'check', page: id, checkedAt: '2026-10-27T09:00:00.000Z',
+      summary: 'Record the guidance review',
+    })
+    expect(result.isError).not.toBe(true)
+    expect(store.pages.find(page => page.id === id)?.lastChecked).toEqual({
+      actorType: 'agent', actorName: 'Assistant', at: '2026-10-27T09:00:00.000Z',
+    })
+    expect(store.agentChanges?.[0]?.agentName).toBe('Assistant')
+  })
+
+  it('preserves the established action order in invalid-action help', async () => {
+    const result = await applyKnowledgeChangeHandler(contextFor(createDefaultKnowledgeStore()), {
+      action: 'unknown', summary: 'Explain supported actions',
+    })
+    expect(result.isError).toBe(true)
+    expect(result.content).toContain('create, update, rename, promote, delete, merge, guidance, check')
+  })
+
+  it('returns identical metadata from context/page/search and preserves human checks on ordinary agent edits', async () => {
+    let store = createDefaultKnowledgeStore()
+    const id = store.pages[0]!.id
+    const check = { actorType: 'human' as const, actorName: 'You', at: '2026-10-01T00:00:00.000Z' }
+    store = createKnowledgePage(store, { spaceId: store.activeSpaceId, kind: 'wiki', title: 'Replacement', body: 'Next' })
+    const target = store.activePageId!
+    store = updateKnowledgePage(store, id, { guidanceStatus: 'current', lastChecked: check, replacementPageId: target })
+    store = { ...store, activePageId: id }
+    const context = contextFor(store)
+    context.saveStore = async update => { store = typeof update === 'function' ? update(store) : update; context.store = store }
+    const before = JSON.stringify(store)
+    const metadata = { guidanceStatus: 'current', statusLabel: 'Current', lastChecked: check, replacementPageId: target }
+    expect(JSON.parse(getKnowledgeContextHandler(context).content).activePage).toMatchObject(metadata)
+    expect(JSON.parse(readKnowledgePageHandler(context, { page: id }).content)).toMatchObject(metadata)
+    expect(JSON.parse(searchKnowledgeHandler(context, { query: '', space: store.activeSpaceId, status: 'current' }).content).pages).toEqual([expect.objectContaining({ id, ...metadata })])
+    expect(JSON.stringify(store)).toBe(before)
+    for (const args of [{ action: 'update', body: 'Changed by agent' }, { action: 'guidance', guidanceStatus: 'retired' }, { action: 'guidance', replacementPageId: null }]) {
+      expect((await applyKnowledgeChangeHandler(context, { ...args, page: id, summary: 'Keep guidance maintained', agentName: 'Steward' })).content).toContain('applied')
+      expect(store.pages.find(page => page.id === id)?.lastChecked).toEqual(check)
+    }
+    const snapshot = JSON.stringify(store)
+    for (const args of [{ action: 'check', checkedAt: '2026-02-30T00:00:00.000Z' }, { action: 'guidance', guidanceStatus: 'invalid' }, { action: 'guidance', replacementPageId: id }, { action: 'guidance', replacementPageId: 'missing' }]) {
+      expect((await applyKnowledgeChangeHandler(context, { ...args, page: id, summary: 'Explicit metadata' })).isError).toBe(true)
+      expect(JSON.stringify(store)).toBe(snapshot)
+    }
+    await applyKnowledgeChangeHandler(context, { action: 'check', page: id, checkedAt: '2026-10-02T00:00:00.000Z', agentName: 'Steward', summary: 'Agent checked the guidance' })
+    expect(store.pages.find(page => page.id === id)?.lastChecked).toEqual({ actorType: 'agent', actorName: 'Steward', at: '2026-10-02T00:00:00.000Z' })
+    expect(store.agentChanges?.[0]?.before).toContain('You')
+    expect(store.agentChanges?.[0]?.after).toContain('Steward')
   })
 })

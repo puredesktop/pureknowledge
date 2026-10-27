@@ -1,3 +1,4 @@
+import { validateGuidancePatch, type GuidancePatch, type GuidanceFilter, guidancePriority, matchesGuidanceFilter } from './knowledgeGuidance'
 /*
  * Note on the `activity` arrays written throughout this store:
  * DEPRECATED(operations-ledger) — as a CROSS-APP FEED source only. They stay
@@ -378,11 +379,12 @@ export function updateKnowledgePage(
   pageId: string,
   patch: Partial<
     Pick<KnowledgePage, 'title' | 'body' | 'tags' | 'kind' | 'parentId'>
-  >,
+  > & GuidancePatch,
   options: KnowledgeMutationOptions = {},
 ): KnowledgeStore {
   const page = store.pages.find(candidate => candidate.id === pageId)
   if (!page) return store
+  validateGuidancePatch(store, page, patch)
   const title = patch.title?.trim() || page.title
   const body = patch.body ?? page.body
   const tags = patch.tags ?? page.tags
@@ -403,6 +405,9 @@ export function updateKnowledgePage(
   }
 
   if (
+    (patch.guidanceStatus === undefined || (patch.guidanceStatus ?? undefined) === page.guidanceStatus) &&
+    (patch.replacementPageId === undefined || patch.replacementPageId === page.replacementPageId) &&
+    (patch.lastChecked === undefined || JSON.stringify(patch.lastChecked) === JSON.stringify(page.lastChecked)) &&
     title === page.title &&
     body === page.body &&
     kind === page.kind &&
@@ -413,9 +418,13 @@ export function updateKnowledgePage(
     return store
   }
 
+  const { guidanceStatus, lastChecked, replacementPageId, ...contentPatch } = patch
   const nextPage: KnowledgePage = {
     ...page,
-    ...patch,
+    ...contentPatch,
+    ...(guidanceStatus === undefined ? {} : { guidanceStatus: guidanceStatus ?? undefined }),
+    ...(lastChecked === undefined ? {} : { lastChecked }),
+    ...(replacementPageId === undefined ? {} : { replacementPageId }),
     title,
     body,
     tags,
@@ -427,6 +436,7 @@ export function updateKnowledgePage(
       page.kind === 'note' && patch.kind === 'wiki' ? now() : page.promotedAt,
   }
 
+  if (guidanceStatus === null) delete nextPage.guidanceStatus
   const promoted = page.kind === 'note' && nextPage.kind === 'wiki'
 
   return {
@@ -608,7 +618,9 @@ export function rankKnowledgePages(
   store: KnowledgeStore,
   query: string,
   limit = 10,
+  status: GuidanceFilter = 'all',
 ): KnowledgePageSearchHit[] {
+  store = { ...store, pages: store.pages.filter(page => matchesGuidanceFilter(page, status)) }
   const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
   const snippetFor = (page: KnowledgePage): string => {
     const body = page.body.replace(/\s+/g, ' ').trim()
@@ -624,7 +636,7 @@ export function rankKnowledgePages(
   }
   if (!terms.length) {
     return [...store.pages]
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .sort((a, b) => guidancePriority(a) - guidancePriority(b) || b.updatedAt.localeCompare(a.updatedAt))
       .slice(0, limit)
       .map(page => ({ page, score: 0, snippet: snippetFor(page) }))
   }
@@ -660,7 +672,7 @@ export function rankKnowledgePages(
     }
     if (score > 0) hits.push({ page, score, snippet: snippetFor(page) })
   }
-  return hits.sort((a, b) => b.score - a.score).slice(0, limit)
+  return hits.sort((a, b) => guidancePriority(a.page) - guidancePriority(b.page) || b.score - a.score).slice(0, limit)
 }
 
 /**
@@ -754,6 +766,9 @@ function applyAgentChangeToPages(
         tags: change.patch.tags,
         kind: change.patch.kind,
         parentId: change.patch.parentId,
+        guidanceStatus: change.patch.guidanceStatus,
+        lastChecked: change.patch.lastChecked,
+        replacementPageId: change.patch.replacementPageId,
       },
       { actor },
     )
