@@ -93,6 +93,9 @@ import {
 import { KNOWLEDGE_APP_SLUG } from './constants'
 import { linkKnowledgeRefs } from './lib/knowledgeRefs'
 import { useKnowledgeAgentTools } from './hooks/useKnowledgeAgentTools'
+import { useKnowledgeMeaning } from './hooks/useKnowledgeMeaning'
+import { MeaningSearchLine } from './components/MeaningSearchLine'
+import { MEANING_MIN_QUERY, rankKnowledgeWithMeaning, type KnowledgeMeaningHit } from './lib/knowledgeMeaning'
 import {
   useKnowledgeWorkspace,
   type KnowledgeStoreUpdate,
@@ -508,6 +511,18 @@ const StyledPageSelect = styled.button`
   }
 `
 
+const StyledMeaningMatch = styled.small`
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: normal;
+  color: var(--platform-colors-text-secondary);
+  b {
+    font-weight: 500;
+    color: var(--platform-colors-text-primary);
+  }
+`
 const StyledSearchResult = styled(StyledPageSelect)`
   display: block;
   width: 100%;
@@ -2025,7 +2040,8 @@ export function KnowledgeWorkspace({
 }): React.ReactElement {
   const { store, storePath, loading, saving, error, saveFailed, saveStore, externalNotice } =
     useKnowledgeWorkspace(boot, resourcePath, onResourceHandled)
-  useKnowledgeAgentTools(true, { store, saveStore, storePath })
+  const meaning = useKnowledgeMeaning(store, storePath)
+  useKnowledgeAgentTools(true, { store, saveStore, storePath, meaning })
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<GuidanceFilter>('all')
   const [spaceMenuOpen, setSpaceMenuOpen] = useState(false)
@@ -2082,15 +2098,45 @@ export function KnowledgeWorkspace({
     return store.pages.find(page => page.id === store.activePageId) ?? null
   }, [store])
 
+  // The search box and the searchKnowledge tool share one ranking. Words answer at once; meaning joins when the model
+  // has read the question, a moment later, so typing never waits for it.
+  const asked = query.trim()
+  const [questionVector, setQuestionVector] = useState<{ query: string; vector: number[] } | null>(null)
+  const { vector: vectorForQuestion } = meaning
+  useEffect(() => {
+    if (asked.length < MEANING_MIN_QUERY) return
+    let stale = false
+    const timer = setTimeout(() => {
+      void vectorForQuestion(asked).then(vector => {
+        if (!stale && vector) setQuestionVector({ query: asked, vector })
+      })
+    }, 180)
+    return () => {
+      stale = true
+      clearTimeout(timer)
+    }
+  }, [asked, vectorForQuestion])
+  const meaningIndex = meaning.index()
+  const indexedPassages = meaning.state.indexed
+  const meaningHits = useMemo(() => {
+    if (!store || !meaningIndex || questionVector?.query !== asked || !asked) return null
+    const hits = rankKnowledgeWithMeaning(store, asked, store.pages.length, statusFilter, meaningIndex, questionVector.vector, { drafts: true })
+    return new Map<string, KnowledgeMeaningHit>(hits.map(hit => [hit.page.id, hit]))
+    // A growing index changes the answer; indexedPassages says it grew.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asked, indexedPassages, meaningIndex, questionVector, statusFilter, store])
+
   const visiblePages = useMemo(() => {
     if (!store || !activeSpace) return []
-    const pages = query.trim() || statusFilter !== 'all'
+    const pages = meaningHits
+      ? [...meaningHits.values()].map(hit => hit.page)
+      : query.trim() || statusFilter !== 'all'
       ? rankKnowledgePages(store, query, store.pages.length, statusFilter).map(
           hit => hit.page,
         )
       : store.pages
     return pages.filter(page => page.spaceId === activeSpace.id)
-  }, [activeSpace, query, statusFilter, store])
+  }, [activeSpace, meaningHits, query, statusFilter, store])
 
   const wikiPages = useMemo(() => {
     if (!store || !activeSpace) return []
@@ -2475,6 +2521,7 @@ export function KnowledgeWorkspace({
             onClear={() => setQuery('')}
           />
           <GuidanceStatusFilter value={statusFilter} onChange={setStatusFilter} />
+          {asked ? <MeaningSearchLine state={meaning.state} onSetUp={meaning.setUp} onRetry={meaning.retry} /> : null}
         </StyledSearch>
         <StyledPageList>
           <StyledTreeHeading>
@@ -2543,6 +2590,11 @@ export function KnowledgeWorkspace({
               <StyledSearchResult type="button" {...agentRefs(result)} aria-current={activePage?.id === result.id ? 'page' : undefined} onClick={() => selectPage(result.id)}>
                 <span>{result.title}</span>
                 <GuidanceSearchDetails page={result} store={store} />
+                {meaningHits?.get(result.id)?.matched === 'meaning' ? (
+                  <StyledMeaningMatch>
+                    <b>Close in meaning</b> {meaningHits.get(result.id)?.snippet}
+                  </StyledMeaningMatch>
+                ) : null}
               </StyledSearchResult>
             </StyledTreeItem>
           )) : <StyledSubtle role="status">No pages match{query.trim() ? ` “${query.trim()}”` : ''} ({guidanceFilterLabel(statusFilter)}).</StyledSubtle> : <>

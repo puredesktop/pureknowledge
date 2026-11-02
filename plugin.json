@@ -47,7 +47,7 @@
         {
           "name": "searchKnowledge",
           "risk": "read",
-          "description": "Search the knowledge base across titles, aliases, tags, page bodies, slugs, wikilinks, and resource links \u2014 the same ranking the sidebar search uses. Empty query lists pages plus the space overview. Matching Current guidance ranks first; relevance (or recency for an empty query) is retained within each status group. getKnowledgeContext names the active space.",
+          "description": "Search the knowledge base by meaning and by words across titles, aliases, tags, page bodies, slugs, wikilinks, and resource links \u2014 the same ranking the sidebar search uses. Ask in plain language; an exact page name comes first. searchedBy says whether meaning was used and searchNote says why not, so if it says words, rephrase with words the page is likely to use. Empty query lists pages plus the space overview. Matching Current guidance ranks first; relevance (or recency for an empty query) is retained within each status group. getKnowledgeContext names the active space.",
           "requiresApproval": false,
           "inputSchema": {
             "type": "object",

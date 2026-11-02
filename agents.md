@@ -48,6 +48,15 @@ concise answers, concrete next actions, and safe tool use.
   has any. Merges and deletes destroy content; every other write is
   logged with before/after and easily corrected.
 
+## Searching
+
+`searchKnowledge` finds pages by what they mean as well as by their words, so
+ask in plain language; an exact page name always comes first. The reply says
+what happened: `searchedBy` is `meaning-and-words` or `words`, `searchNote` says
+why when it is words only or the index is still being read, and each page's
+`matched` says how it was found. When the search was by words only, rephrase with
+words the page is likely to use before deciding something is not written down.
+
 ## Common sense
 
 The principle underlying every rule here: **information you cannot know

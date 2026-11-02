@@ -38,7 +38,7 @@ export function useKnowledgeAgentTools(
     errorType: AgentKnowledgeToolError,
     handlers: {
       getKnowledgeContext: privateAccess(async () => getKnowledgeContextHandler(contextRef.current)),
-      searchKnowledge: privateAccess(async invoke => searchKnowledgeHandler(contextRef.current, invoke.arguments ?? {})),
+      searchKnowledge: privateAccess(invoke => searchKnowledgeHandler(contextRef.current, invoke.arguments ?? {})),
       readKnowledgePage: privateAccess(async invoke => readKnowledgePageHandler(contextRef.current, invoke.arguments ?? {})),
       listSpaces: privateAccess(async () => listSpacesHandler(contextRef.current)),
       getBacklinks: privateAccess(async invoke => getBacklinksHandler(contextRef.current, invoke.arguments ?? {})),

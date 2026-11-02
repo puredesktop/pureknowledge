@@ -25,6 +25,7 @@ import type {
   KnowledgePage,
   KnowledgeStore,
 } from '../lib/knowledgeTypes'
+import { MEANING_MIN_QUERY, meaningSearchNote, rankKnowledgeWithMeaning } from '../lib/knowledgeMeaning'
 import type { KnowledgeAgentToolContext } from './catalog'
 
 function requireStore(
@@ -173,10 +174,10 @@ export function getKnowledgeContextHandler(
   }
 }
 
-export function searchKnowledgeHandler(
+export async function searchKnowledgeHandler(
   context: KnowledgeAgentToolContext,
   args: Record<string, unknown>,
-): AgentToolHandlerResult {
+): Promise<AgentToolHandlerResult> {
   const fullStore = requireStore(context)
   if ('error' in fullStore) return agentToolErrorContent(fullStore.error)
   const spaceRef = readAgentToolStringArg(args, 'space')
@@ -200,10 +201,24 @@ export function searchKnowledgeHandler(
       : 10
   if (args.status !== undefined && !GUIDANCE_FILTERS.includes(args.status as GuidanceFilter)) return agentToolErrorContent('status must be all, unmarked, draft, current or retired.')
   const effectiveStore={...store,pages:store.pages.filter(p=>!p.governance?.archived).map(p=>effectiveKnowledgePage(p,args.includeDrafts===true)).filter((p):p is KnowledgePage=>p!==null)}
-  const hits = rankKnowledgePages(effectiveStore, query, limit, args.status as GuidanceFilter | undefined)
+  const status = args.status as GuidanceFilter | undefined
+  const asked = query.trim()
+  // The same ranking the search box uses (lib/knowledgeMeaning); words alone when meaning cannot answer, and it says so.
+  const meaningIndex = asked.length >= MEANING_MIN_QUERY ? context.meaning?.index() ?? null : null
+  const queryVector = meaningIndex ? await context.meaning?.vector(asked).catch(() => null) ?? null : null
+  const byMeaning = meaningIndex && queryVector
+    ? rankKnowledgeWithMeaning(effectiveStore, asked, limit, status, meaningIndex, queryVector, { drafts: args.includeDrafts === true })
+    : null
+  const hits: Array<{ page: KnowledgePage; snippet: string; matched?: string }> = byMeaning ?? rankKnowledgePages(effectiveStore, query, limit, status)
+  const readiness = context.meaning?.readiness() ?? { state: 'unsupported' as const }
+  const searchNote = asked.length < MEANING_MIN_QUERY
+    ? null
+    : meaningSearchNote(readiness) ?? (byMeaning ? null : meaningSearchNote({ state: 'failed' }))
   return {
     content: formatAgentToolJson({
       query: query || null,
+      searchedBy: byMeaning ? 'meaning-and-words' : 'words',
+      ...(searchNote ? { searchNote } : {}),
       totalPages: store.pages.length,
       spaces: store.spaces.map(space => ({ id: space.id, name: space.name })),
       pages: hits.map(hit => ({
@@ -215,6 +230,7 @@ export function searchKnowledgeHandler(
         tags: hit.page.tags,
         updatedAt: hit.page.updatedAt,
         snippet: hit.snippet,
+        ...(hit.matched ? { matched: hit.matched } : {}),
       })),
       note: query
         ? 'Read a page in full with readKnowledgePage.'

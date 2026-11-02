@@ -1,3 +1,5 @@
+import { emptyKnowledgeSearchIndex, updateKnowledgeSearchIndex, type KnowledgeMeaning, type KnowledgeMeaningReadiness } from '../lib/knowledgeMeaning'
+import type { KnowledgeStore } from '../lib/knowledgeTypes'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../bridge/platformBridge', () => ({
@@ -280,7 +282,7 @@ describe('applyKnowledgeChange ledger wiring', () => {
 })
 
 describe('searchKnowledge (unified ranking)', () => {
-  it('uses the ranked implementation shared with the sidebar', () => {
+  it('uses the ranked implementation shared with the sidebar', async () => {
     let store = createDefaultKnowledgeStore()
     store = createKnowledgePage(store, {
       spaceId: store.activeSpaceId,
@@ -289,7 +291,7 @@ describe('searchKnowledge (unified ranking)', () => {
       title: 'Deployment checklist',
       body: 'Steps for a release.',
     })
-    const result = searchKnowledgeHandler(contextFor(store), {
+    const result = await searchKnowledgeHandler(contextFor(store), {
       query: 'deployment',
     })
     const parsed = JSON.parse(result.content) as {
@@ -342,7 +344,7 @@ describe('burst create then search (regression)', () => {
     }
     await ctx.saveChain
 
-    const search = searchKnowledgeHandler(ctx, { query: 'roadmap' })
+    const search = await searchKnowledgeHandler(ctx, { query: 'roadmap' })
     const parsed = JSON.parse(search.content) as {
       totalPages: number
       pages: Array<{ title: string }>
@@ -351,7 +353,7 @@ describe('burst create then search (regression)', () => {
     expect(parsed.totalPages).toBeGreaterThanOrEqual(3)
 
     // An empty-query search (the "list recent" branch) must also return.
-    const recent = searchKnowledgeHandler(ctx, {})
+    const recent = await searchKnowledgeHandler(ctx, {})
     expect(() => JSON.parse(recent.content)).not.toThrow()
   })
 })
@@ -587,7 +589,7 @@ describe('guidance agent parity and writes', () => {
     const metadata = { guidanceStatus: 'current', statusLabel: 'Current', lastChecked: check, replacementPageId: target }
     expect(JSON.parse(getKnowledgeContextHandler(context).content).activePage).toMatchObject(metadata)
     expect(JSON.parse(readKnowledgePageHandler(context, { page: id }).content)).toMatchObject(metadata)
-    expect(JSON.parse(searchKnowledgeHandler(context, { query: '', space: store.activeSpaceId, status: 'current' }).content).pages).toEqual([expect.objectContaining({ id, ...metadata })])
+    expect(JSON.parse((await searchKnowledgeHandler(context, { query: '', space: store.activeSpaceId, status: 'current' })).content).pages).toEqual([expect.objectContaining({ id, ...metadata })])
     expect(JSON.stringify(store)).toBe(before)
     for (const args of [{ action: 'update', body: 'Changed by agent' }, { action: 'guidance', guidanceStatus: 'retired' }, { action: 'guidance', replacementPageId: null }]) {
       expect((await applyKnowledgeChangeHandler(context, { ...args, page: id, summary: 'Keep guidance maintained', agentName: 'Steward' })).content).toContain('applied')
@@ -602,5 +604,74 @@ describe('guidance agent parity and writes', () => {
     expect(store.pages.find(page => page.id === id)?.lastChecked).toEqual({ actorType: 'agent', actorName: 'Steward', at: '2026-10-02T00:00:00.000Z' })
     expect(store.agentChanges?.[0]?.before).toContain('You')
     expect(store.agentChanges?.[0]?.after).toContain('Steward')
+  })
+})
+
+describe('searchKnowledge by meaning', () => {
+  const dims = 4
+  const vectorOf = (text: string) => {
+    const on = /money|funding|backers/i.test(text) ? 0 : /trips|flights/i.test(text) ? 1 : 2
+    return [0, 1, 2, 3].map(i => (i === on ? 1 : 0))
+  }
+  const withPages = () => {
+    let store = createDefaultKnowledgeStore()
+    store = createKnowledgePage(store, { spaceId: store.activeSpaceId, parentId: store.spaces[0]!.rootPageId, kind: 'wiki', title: 'Fundraising', body: 'Talking about funding.' })
+    store = createKnowledgePage(store, { spaceId: store.activeSpaceId, parentId: store.spaces[0]!.rootPageId, kind: 'wiki', title: 'Holidays', body: 'Booking flights.' })
+    return store
+  }
+  const meaningFor = async (store: KnowledgeStore, state: KnowledgeMeaningReadiness = { state: 'ready' }): Promise<KnowledgeMeaning> => {
+    const { index } = await updateKnowledgeSearchIndex(emptyKnowledgeSearchIndex('m', dims), store.pages, async texts => texts.map(vectorOf))
+    return { readiness: () => state, index: () => index, vector: async query => vectorOf(query) }
+  }
+
+  it('finds a page by meaning through the same ranking as the search box, and says so', async () => {
+    const store = withPages()
+    const context = { ...contextFor(store), meaning: await meaningFor(store) }
+    const parsed = JSON.parse((await searchKnowledgeHandler(context, { query: 'who are our backers' })).content)
+    expect(parsed.searchedBy).toBe('meaning-and-words')
+    expect(parsed.searchNote).toBeUndefined()
+    expect(parsed.pages[0]).toMatchObject({ title: 'Fundraising', matched: 'meaning' })
+  })
+
+  it('says it searched words only when the model is not set up, and still finds words', async () => {
+    const store = withPages()
+    const missing: KnowledgeMeaning = { readiness: () => ({ state: 'absent' }), index: () => null, vector: async () => null }
+    const parsed = JSON.parse((await searchKnowledgeHandler({ ...contextFor(store), meaning: missing }, { query: 'funding' })).content)
+    expect(parsed.searchedBy).toBe('words')
+    expect(parsed.searchNote).toMatch(/not set up.*exact words only/)
+    expect(parsed.pages[0].title).toBe('Fundraising')
+    expect(JSON.parse((await searchKnowledgeHandler({ ...contextFor(store), meaning: missing }, { query: 'who are our backers' })).content).pages).toEqual([])
+  })
+
+  it('says so when the host has no model service at all', async () => {
+    const parsed = JSON.parse((await searchKnowledgeHandler(contextFor(withPages()), { query: 'funding' })).content)
+    expect(parsed.searchedBy).toBe('words')
+    expect(parsed.searchNote).toMatch(/cannot search by meaning/)
+  })
+
+  it('falls back to words and says so when the model fails on the question', async () => {
+    const store = withPages()
+    const meaning = { ...(await meaningFor(store)), vector: async () => { throw new Error('gone') } }
+    const parsed = JSON.parse((await searchKnowledgeHandler({ ...contextFor(store), meaning }, { query: 'funding' })).content)
+    expect(parsed.searchedBy).toBe('words')
+    expect(parsed.searchNote).toMatch(/stopped working/)
+    expect(parsed.pages[0].title).toBe('Fundraising')
+  })
+
+  it('says when the index is still being built, and uses what it has', async () => {
+    const store = withPages()
+    const meaning = await meaningFor(store, { state: 'indexing', indexed: 2, total: 9 })
+    const parsed = JSON.parse((await searchKnowledgeHandler({ ...contextFor(store), meaning }, { query: 'backers' })).content)
+    expect(parsed.searchedBy).toBe('meaning-and-words')
+    expect(parsed.searchNote).toMatch(/2 of 9/)
+  })
+
+  it('does not ask the model about an empty query', async () => {
+    const store = withPages()
+    const vector = vi.fn(async () => [1, 0, 0, 0])
+    const meaning = { ...(await meaningFor(store)), vector }
+    const parsed = JSON.parse((await searchKnowledgeHandler({ ...contextFor(store), meaning }, {})).content)
+    expect(vector).not.toHaveBeenCalled()
+    expect(parsed.searchNote).toBeUndefined()
   })
 })
