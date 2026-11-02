@@ -1,3 +1,4 @@
+import type { KnowledgeMeaning } from '../lib/knowledgeMeaning'
 import type { KnowledgeStore } from '../lib/knowledgeTypes'
 
 /** Keep in sync with `plugin.json` -> `app.agents.tools[].name`. */
@@ -33,4 +34,6 @@ export interface KnowledgeAgentToolContext {
     update: KnowledgeStore | ((current: KnowledgeStore) => KnowledgeStore),
   ) => Promise<void>
   storePath: string
+  /** Search by meaning, when this host can offer it; without it search is by words and says so. */
+  meaning?: KnowledgeMeaning
 }

@@ -73,6 +73,16 @@ Retired pages keep their content and existing links, and display a prominent
 page says so and remains readable; it never substitutes a page with a similar
 title or redirects automatically.
 
+Search finds pages by what they mean as well as the words on them, once you add
+the small search model when the search box offers it. The model runs on this
+computer and no text leaves it; remove it in Settings › Models. Until it is set up,
+or if it stops working, the search box says it is searching exact words only. A page
+found only by meaning shows the closest passage under “Close in meaning”. An exact
+page name always comes first, and any page holding every word you typed stays in
+the results. The index is `search-index.json` in the library, kept up to date as pages
+change and safe to delete. The model was trained on English, so meaning works best on
+English pages; other languages are still found by their words.
+
 Search shows status, check attribution/date and replacement identity. Matching
 Current guidance appears first, followed by Draft, unmarked and Retired pages;
 relevance is preserved within each group. **Status filter** can show any group,

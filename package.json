@@ -9,7 +9,9 @@
     "./createOrganisationKnowledge": "./src/lib/createOrganisationKnowledge.ts",
     "./knowledgePages": "./src/lib/knowledgePages.ts",
     "./knowledgeStore": "./src/lib/knowledgeStore.ts",
-    "./knowledgePackage": "./src/lib/knowledgePackage.ts"
+    "./knowledgePackage": "./src/lib/knowledgePackage.ts",
+    "./knowledgeMeaning": "./src/lib/knowledgeMeaning.ts",
+    "./knowledgeTypes": "./src/lib/knowledgeTypes.ts"
   },
   "scripts": {
     "dev": "vite",

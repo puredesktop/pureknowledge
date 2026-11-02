@@ -16,6 +16,23 @@ libraries do not become the account's personal default. On a host whose workspac
 contains an organisation record, startup binds the app to that organisation and
 refuses another resource. Only confirmed absence enables personal mode.
 
+## Search by meaning
+
+Search finds pages by what they mean as well as their words, using a model that
+runs on this computer. Pure ranking rules (`knowledgeMeaningScores`,
+`blendKnowledgeSearch`) live in `organisationKnowledge.mjs`, so PureKnowledge, the
+team's search box and the agents' `search_org_knowledge` rank alike.
+
+The index is `search-index.json` beside `index.json`. It is derived from the pages,
+is safe to delete, and is ignored and rebuilt if another model made it. Published
+text and a differing working draft are indexed apart (`<id>` and `<id>#draft`), so
+a page cannot be found by unpublished wording unless drafts were requested.
+
+An MCP server has no bridge, so the desktop gives it a private local socket
+(`--meaning-socket`) that turns one question into a vector; the server reads only
+its own library's index. With no socket, no index or no answer within five seconds
+it searches words, and `searchedBy` and `searchNote` say so.
+
 ## Agents and isolation
 
 The shared dependency-free `organisationKnowledge.mjs` owns the retrieval rules.
