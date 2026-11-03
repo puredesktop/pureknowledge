@@ -16,6 +16,8 @@ export interface PlatformAppSettingsUpdateRequest {
 
 export interface KnowledgeBootState {
   organisation?: {id:string;folder:string}|null
+  /** This copy is held inside another page, alongside any normal tab: it starts no shared background work of its own. */
+  heldCopy?: boolean
   prefs: ShellPreferences
   appSettings: KnowledgeAppSettings
 }

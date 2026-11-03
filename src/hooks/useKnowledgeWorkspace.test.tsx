@@ -69,6 +69,9 @@ vi.mock('@purescience/platform-ui/bridge/documents', () => ({
     },
   ),
 }))
+vi.mock('../bridge/writerLease', () => ({
+  withKnowledgeWriter: <T,>(work: () => Promise<T>) => work(),
+}))
 const A = '/audit/A.knowledge'
 const B = '/audit/B.knowledge'
 const boot: KnowledgeBootState = {

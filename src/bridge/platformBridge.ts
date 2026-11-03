@@ -37,6 +37,18 @@ export async function fetchOrganisationBinding(): Promise<{id:string;folder:stri
   return {id,folder}
 }
 
+/**
+ * Whether this copy is held inside a page, alongside any normal tab of the app. Nested in another app's frame it is, from
+ * the first line (a room, in compact or Full app alike). The Personal agent's page is hosted by the shell itself, so the
+ * frame looks like a tab's: the shell says so instead. Known before anything starts, so nothing starts twice.
+ */
+export async function fetchHeldCopy(): Promise<boolean> {
+  if (window.parent === window) return false
+  if (window.parent !== window.top) return true
+  const beside = await bridge.call<{ heldInRoom?: boolean } | null>(PLATFORM_BRIDGE_METHODS.WORKSPACE_ADJACENT_APP).catch(() => null)
+  return beside?.heldInRoom === true
+}
+
 export async function fetchShellPreferences(): Promise<ShellPreferences> {
   return getPlatformPreferences() as Promise<ShellPreferences>
 }

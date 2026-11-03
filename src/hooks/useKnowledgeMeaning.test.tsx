@@ -24,11 +24,11 @@ const SAVED = `${PATH}/search-index.json`
 let root: Root
 let current: ReturnType<typeof useKnowledgeMeaning>
 let saved: string | null
-function Harness({ store, path }: { store: KnowledgeStore | null; path: string }) {
-  current = useKnowledgeMeaning(store, path)
+function Harness({ store, path, heldCopy }: { store: KnowledgeStore | null; path: string; heldCopy?: boolean }) {
+  current = useKnowledgeMeaning(store, path, { heldCopy })
   return null
 }
-const render = (store: KnowledgeStore | null, path = PATH) => act(async () => root.render(createElement(Harness, { store, path })))
+const render = (store: KnowledgeStore | null, path = PATH, heldCopy = false) => act(async () => root.render(createElement(Harness, { store, path, heldCopy })))
 const settled = () => vi.waitFor(() => expect(current.state.state).toBe('ready'), { timeout: 4000 })
 const embedded = () => vi.mocked(embedTexts).mock.calls.flatMap(([request]) => request.purpose === 'passage' ? request.texts : [])
 
@@ -53,6 +53,65 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   vi.resetAllMocks()
+})
+
+describe('a held copy of the app', () => {
+  const index = async () => {
+    await render(library())
+    await settled()
+    await act(async () => root.unmount())
+    root = createRoot(document.createElement('div'))
+    vi.mocked(embedTexts).mockClear()
+    vi.mocked(writeTextFile).mockClear()
+    return saved
+  }
+
+  it('reads the saved index and neither embeds a page nor writes the file', async () => {
+    const before = await index()
+    await render(library(), PATH, true)
+    await settled()
+    expect(embedded()).toEqual([])
+    expect(writeTextFile).not.toHaveBeenCalled()
+    expect(saved).toBe(before)
+    expect(current.index()).not.toBeNull()
+    expect(Object.keys(current.index()!.pages).length).toBeGreaterThan(0)
+  })
+
+  it('leaves new pages to the normal tab, and still reads them by words: it says ready, never that it is working', async () => {
+    await index()
+    await render(createKnowledgePage(library(), { spaceId: 's', kind: 'wiki', title: 'New', body: 'Words nobody has read yet.' }), PATH, true)
+    await settled()
+    expect(embedded()).toEqual([])
+    expect(writeTextFile).not.toHaveBeenCalled()
+    expect(current.state.state).toBe('ready')
+  })
+
+  it('with no index at all it still makes none', async () => {
+    await render(library(), PATH, true)
+    await settled()
+    expect(embedded()).toEqual([])
+    expect(writeTextFile).not.toHaveBeenCalled()
+    expect(saved).toBeNull()
+  })
+
+  it('takes up what the normal tab saved when it next looks', async () => {
+    const written = await index()
+    saved = null
+    await render(library(), PATH, true)
+    await settled()
+    expect(Object.keys(current.index()!.pages)).toEqual([])
+    saved = written
+    await render({ ...library() }, PATH, true)
+    await vi.waitFor(() => expect(Object.keys(current.index()!.pages).length).toBeGreaterThan(0), { timeout: 4000 })
+  })
+
+  it('still asks the model about a question: a search is not background work', async () => {
+    await index()
+    await render(library(), PATH, true)
+    await settled()
+    await current.vector('who are the investors?')
+    expect(vi.mocked(embedTexts).mock.calls.at(-1)?.[0].purpose).toBe('query')
+  })
 })
 
 describe('useKnowledgeMeaning', () => {

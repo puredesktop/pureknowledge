@@ -1,6 +1,6 @@
 /** Merge content written by another app instance into the local state. */
 import { latestKnowledgePages, serializePageFile } from './knowledgePages'
-import type { KnowledgeStore } from './knowledgeTypes'
+import type { KnowledgePage, KnowledgeStore } from './knowledgeTypes'
 
 /** Does a changed path belong to this package? */
 export function isKnowledgePackageChange(
@@ -22,6 +22,10 @@ export interface KnowledgeExternalMergeResult {
   conflicts: string[]
   /** True when the merge output differs from the incoming disk state. */
   changedFromIncoming: boolean
+  /** Pages whose newer local edit was kept: the next save still has to meet the disk version, so nothing is lost. */
+  conflictIds: string[]
+  /** Saved pages gone from disk that held unsaved words here: deleted elsewhere, so not carried on as they were. */
+  deletedWithWords: KnowledgePage[]
 }
 
 function latestTimestamp(a: string | undefined, b: string | undefined): number {
@@ -56,6 +60,7 @@ export function mergeExternalKnowledgeStore(
   local = { ...local, pages: latestKnowledgePages(local.pages) }
   incoming = { ...incoming, pages: latestKnowledgePages(incoming.pages) }
   const conflicts: string[] = []
+  const conflictIds: string[] = []
   const durableById = new Map(durable?.pages.map(page => [page.id, page]) ?? [])
   const hasLocalEdit = (page: KnowledgeStore['pages'][number]) => {
     const saved = durableById.get(page.id)
@@ -80,28 +85,31 @@ export function mergeExternalKnowledgeStore(
           localAt > incomingAt
     ) {
       conflicts.push(localPage.title)
+      conflictIds.push(localPage.id)
       return localPage
     }
     return incomingPage
   })
-  const localOnlyPages = local.pages.filter(
-    page => !incomingIds.has(page.id) && (!durable || hasLocalEdit(page)),
-  )
+  const localOnly = local.pages.filter(page => !incomingIds.has(page.id))
+  const wasSaved = (page: KnowledgePage) => durable && durableById.has(page.id)
+  // A page this copy had saved and disk no longer has was deleted elsewhere: it stays deleted, and any words go elsewhere.
+  const deletedWithWords = localOnly.filter(page => wasSaved(page) && hasLocalEdit(page))
+  const localOnlyPages = localOnly.filter(page => !durable || (!wasSaved(page) && hasLocalEdit(page)))
   const mergedPages = [...localOnlyPages, ...pages]
 
   const incomingSpaceIds = new Set(incoming.spaces.map(space => space.id))
   const durableSpaceIds = new Set(durable?.spaces.map(space => space.id) ?? [])
   const localOnlySpaceIds = new Set(localOnlyPages.map(page => page.spaceId))
-  const spaces = [
-    ...incoming.spaces,
-    ...local.spaces.filter(
-      space =>
-        !incomingSpaceIds.has(space.id) &&
-        (!durable ||
-          !durableSpaceIds.has(space.id) ||
-          localOnlySpaceIds.has(space.id)),
-    ),
-  ]
+  const localOnlySpaces = local.spaces.filter(
+    space =>
+      !incomingSpaceIds.has(space.id) &&
+      (!durable ||
+        !durableSpaceIds.has(space.id) ||
+        localOnlySpaceIds.has(space.id)),
+  )
+  const spaces = localOnlySpaces.length
+    ? [...incoming.spaces, ...localOnlySpaces]
+    : incoming.spaces
 
   const mergeById = <T extends { id: string }>(
     a: T[],
@@ -128,11 +136,14 @@ export function mergeExternalKnowledgeStore(
   const activeSpaceId = spaces.some(space => space.id === local.activeSpaceId)
     ? local.activeSpaceId
     : incoming.activeSpaceId
-  const activePageId =
-    local.activePageId &&
-    mergedPages.some(page => page.id === local.activePageId)
-      ? local.activePageId
-      : incoming.activePageId
+  const exists = (pageId: string | null | undefined) =>
+    Boolean(pageId) && mergedPages.some(page => page.id === pageId)
+  // The page open here, else the one the file says, else another: the file's can be gone too, if a held copy deleted it.
+  const activePageId = exists(local.activePageId)
+    ? local.activePageId
+    : exists(incoming.activePageId)
+      ? incoming.activePageId
+      : mergedPages.find(page => page.spaceId === activeSpaceId && page.kind === 'wiki')?.id ?? null
 
   const store: KnowledgeStore = {
     ...incoming,
@@ -147,6 +158,8 @@ export function mergeExternalKnowledgeStore(
   return {
     store,
     conflicts,
+    conflictIds,
+    deletedWithWords,
     changedFromIncoming:
       conflicts.length > 0 ||
       localOnlyPages.length > 0 ||

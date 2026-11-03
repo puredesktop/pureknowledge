@@ -19,6 +19,8 @@ const STATUS_POLL_MS = 30_000
 const UPDATE_DELAY_MS = 1_500
 const SAVE_EVERY_MS = 5_000
 const CACHED_QUESTIONS = 50
+/** How often a held copy looks at the saved index, which the app's normal tab keeps current. */
+const HELD_INDEX_LOOK_MS = 60_000
 
 export interface UseKnowledgeMeaningResult extends KnowledgeMeaning {
   state: KnowledgeMeaningReadiness
@@ -47,8 +49,13 @@ function readinessFrom(status: EmbeddingStatus): KnowledgeMeaningReadiness {
 /**
  * Keeps this library's search index current and answers questions against it. Nothing runs until the model is on the
  * computer and the person agreed to it; until then search stays by words, and `state` lets the app say so.
+ *
+ * A held copy (one shown inside a page, beside any normal tab) reads the saved index and never embeds a page or writes
+ * the file: two copies reading the same pages would do the work twice and overwrite each other's index. It still asks the
+ * model about a question, since a search is not background work. Pages the index does not cover yet are matched by words.
  */
-export function useKnowledgeMeaning(store: KnowledgeStore | null, storePath: string): UseKnowledgeMeaningResult {
+export function useKnowledgeMeaning(store: KnowledgeStore | null, storePath: string, options: { heldCopy?: boolean } = {}): UseKnowledgeMeaningResult {
+  const heldCopy = options.heldCopy === true
   const [status, setStatus] = useState<EmbeddingStatus | null>(null)
   const [progress, setProgress] = useState<{ indexed: number; total: number; settled: boolean } | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
@@ -84,6 +91,7 @@ export function useKnowledgeMeaning(store: KnowledgeStore | null, storePath: str
   target.current = modelId && dimensions ? { filePath, modelId, dimensions } : null
   const running = useRef(false)
   const again = useRef(false)
+  const savedText = useRef<string | null>(null)
   const refresh = useCallback(async () => {
     if (running.current) {
       again.current = true
@@ -95,6 +103,17 @@ export function useKnowledgeMeaning(store: KnowledgeStore | null, storePath: str
         again.current = false
         const goal = target.current
         if (!goal) return
+        if (heldCopy) {
+          const raw = await readTextFile(goal.filePath).catch(() => null)
+          if (raw !== savedText.current || indexRef.current?.path !== goal.filePath || indexRef.current.index.modelId !== goal.modelId) {
+            savedText.current = raw
+            indexRef.current = { path: goal.filePath, index: parseKnowledgeSearchIndex(raw, goal.modelId, goal.dimensions) }
+          }
+          const plan = planKnowledgeSearchUpdate(indexRef.current.index, pagesRef.current)
+          setProgress({ indexed: plan.totalPassages - plan.missingPassages, total: plan.totalPassages, settled: true })
+          setFailure(null)
+          continue
+        }
         if (indexRef.current?.path !== goal.filePath || indexRef.current.index.modelId !== goal.modelId) {
           const raw = await readTextFile(goal.filePath).catch(() => null)
           indexRef.current = { path: goal.filePath, index: parseKnowledgeSearchIndex(raw, goal.modelId, goal.dimensions) }
@@ -141,7 +160,7 @@ export function useKnowledgeMeaning(store: KnowledgeStore | null, storePath: str
     } finally {
       running.current = false
     }
-  }, [])
+  }, [heldCopy])
   const pages = store?.pages
   useEffect(() => {
     if (!modelId || !dimensions || !pages) return
@@ -149,6 +168,11 @@ export function useKnowledgeMeaning(store: KnowledgeStore | null, storePath: str
     return () => clearTimeout(timer)
   }, [attempt, dimensions, filePath, modelId, pages, refresh])
   useEffect(() => () => { target.current = null }, [])
+  useEffect(() => {
+    if (!heldCopy || !modelId || !dimensions) return
+    const timer = setInterval(() => void refresh(), HELD_INDEX_LOOK_MS)
+    return () => clearInterval(timer)
+  }, [dimensions, heldCopy, modelId, refresh])
 
   const state = useMemo<KnowledgeMeaningReadiness>(() => {
     if (!status) return { state: 'checking' }
