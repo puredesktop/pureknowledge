@@ -222,6 +222,21 @@ it('with no change event at all, as in a room: typing over a save never seen kee
   expect(copy.textContent).toMatch(/another window/)
 })
 
+it('words being typed when the other copy deletes the page: it stays deleted, and the words are kept and said so', async () => {
+  const page = seed()
+  const copy = await openCopy()
+  await click(copy, 'Edit page')
+  await click(copy, 'Write body')
+  await act(async () => {
+    io.files.delete(`${PACKAGE}/pages/${pageFileName(page)}`)
+    for (const listener of io.listeners) listener({ kind: 'content', path: `${PACKAGE}/pages/${pageFileName(page)}` })
+  })
+  await wait(600)
+  expect(shared(page.id)).toBeUndefined()
+  expect(pages().some(item => item.body.includes('Typed here'))).toBe(true)
+  expect(copy.textContent).toMatch(/deleted in another window/)
+})
+
 it('its own autosave coming back is not taken for another copy', async () => {
   const page = seed()
   const copy = await openCopy()

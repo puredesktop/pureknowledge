@@ -94,6 +94,7 @@ import {
 import { KNOWLEDGE_APP_SLUG } from './constants'
 import { linkKnowledgeRefs } from './lib/knowledgeRefs'
 import { useCompactInRoom } from './hooks/useCompactInRoom'
+import { keepKnowledgeVersion, keptPageTitle } from './lib/knowledgeSaveMerge'
 import { useKnowledgeAgentTools } from './hooks/useKnowledgeAgentTools'
 import { useKnowledgeMeaning } from './hooks/useKnowledgeMeaning'
 import { MeaningSearchLine } from './components/MeaningSearchLine'
@@ -2045,7 +2046,7 @@ export function KnowledgeWorkspace({
 }): React.ReactElement {
   const { store, storePath, loading, saving, error, saveFailed, saveStore, externalNotice } =
     useKnowledgeWorkspace(boot, resourcePath, onResourceHandled)
-  const meaning = useKnowledgeMeaning(store, storePath)
+  const meaning = useKnowledgeMeaning(store, storePath, { heldCopy: boot.heldCopy })
   useKnowledgeAgentTools(true, { store, saveStore, storePath, meaning })
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<GuidanceFilter>('all')
@@ -2469,7 +2470,7 @@ export function KnowledgeWorkspace({
             <Button
               variant="subtle"
               size="sm"
-              onClick={() => void saveStore(store).catch(() => undefined)}
+              onClick={() => void saveStore(current => current).catch(() => undefined)}
             >
               Retry save
             </Button>
@@ -2537,7 +2538,7 @@ export function KnowledgeWorkspace({
             variant="subtle"
             size="sm"
             title={error?.message}
-            onClick={() => void saveStore(store).catch(() => undefined)}
+            onClick={() => void saveStore(current => current).catch(() => undefined)}
           >
             Retry save
           </Button>
@@ -3061,6 +3062,20 @@ function KnowledgeAgentReview({
   )
 }
 
+/** Only what the person changed in this editor: a field left alone must not write back the version it opened with. */
+function ownDraftChanges(
+  base: { title: string; body: string; tags: string },
+  draft: { titleDraft: string; bodyDraft: string; tagsDraft: string },
+): { title?: string; body?: string; tags?: string[] } {
+  return {
+    ...(draft.titleDraft !== base.title ? { title: draft.titleDraft } : {}),
+    ...(draft.bodyDraft !== base.body ? { body: normalizeWikiLinkEscapes(draft.bodyDraft) } : {}),
+    ...(draft.tagsDraft !== base.tags
+      ? { tags: draft.tagsDraft.split(',').map(tag => tag.trim()).filter(Boolean) }
+      : {}),
+  }
+}
+
 function recordKnowledgeEditSession(
   baseline: { title: string; body: string; tags: string } | null,
   titleDraft: string,
@@ -3080,7 +3095,36 @@ function recordKnowledgeEditSession(
   }
 }
 
-export function KnowledgePageEditor({
+interface KnowledgePageEditorProps {
+  packagePath: string
+  store: KnowledgeStore
+  activeSpace: KnowledgeSpace
+  page: KnowledgePage | null
+  saving: boolean
+  onSelectPage: (pageId: string) => void
+  onSave: (update: KnowledgeStoreUpdate) => void
+  onSaveGuidance?: (update: KnowledgeStoreUpdate) => void | Promise<void>
+  editRequest: { pageId: string; nonce: number } | null
+  /** Held inside a page: the way back to the list, and how saving stands. */
+  compact?: { onBack: () => void; status: string }
+}
+
+/** No page is its own view: the open page can go at any moment, when another window deletes it. */
+export function KnowledgePageEditor(props: KnowledgePageEditorProps): React.ReactElement {
+  if (!props.page) {
+    return (
+      <StyledEditorPane {...(props.compact ? { 'data-compact-part': 'page' } : undefined)}>
+        <EmptyState
+          title="Select a page"
+          message="Choose a wiki page or note, or create one where it belongs."
+        />
+      </StyledEditorPane>
+    )
+  }
+  return <OpenPageEditor {...props} page={props.page} />
+}
+
+function OpenPageEditor({
   packagePath,
   store,
   activeSpace,
@@ -3091,19 +3135,7 @@ export function KnowledgePageEditor({
   onSaveGuidance = onSave,
   editRequest,
   compact,
-}: {
-  packagePath: string
-  store: KnowledgeStore
-  activeSpace: KnowledgeSpace
-  page: KnowledgePage | null
-  saving: boolean
-  onSelectPage: (pageId: string) => void
-  onSave: (update: KnowledgeStoreUpdate) => void
-  onSaveGuidance?: (update: KnowledgeStoreUpdate) => void | Promise<void>
-  editRequest: { pageId: string; nonce: number } | null
-  /** Held by the Executive room: the way back to the list, and how saving stands. */
-  compact?: { onBack: () => void; status: string }
-}): React.ReactElement {
+}: KnowledgePageEditorProps & { page: KnowledgePage }): React.ReactElement {
   const compactHide = compact ? { 'data-compact-hide': '' } : undefined
   const compactPart = (part: string) => (compact ? { 'data-compact-part': part } : undefined)
   const [titleDraft, setTitleDraft] = useState('')
@@ -3129,11 +3161,24 @@ export function KnowledgePageEditor({
   const galleryImportIndexRef = useRef<number | null>(null)
   const galleryRemoveCancelRef = useRef<HTMLButtonElement>(null)
   const dropSurface = useRef<HTMLDivElement>(null)
+  // What the drafts started from. Only what differs from it is the person's own: a stale draft is not an edit.
+  const draftBase = useRef({ title: '', body: '', tags: '' })
+  // Bodies this editor sent to the store: their return is not news from elsewhere.
+  const sentBodies = useRef(new Set<string>())
+  const noteSent = (body: string): void => {
+    sentBodies.current.add(body)
+    if (sentBodies.current.size > 40) sentBodies.current.delete(sentBodies.current.values().next().value as string)
+  }
+  const [keptNote, setKeptNote] = useState('')
+  const nextKeptNote = useRef('')
+  // Bumped when words from elsewhere replace an untouched draft: the open editor starts again from them.
+  const [editorVersion, setEditorVersion] = useState(0)
   const [preparedBody, setPreparedBody] = useState<{
     pageId: string
+    version: number
     html: string
     imageFailures: Array<{ path: string; message: string }>
-  }>({ pageId: '', html: '', imageFailures: [] })
+  }>({ pageId: '', version: 0, html: '', imageFailures: [] })
   const editorHtml = preparedBody.pageId === page?.id ? preparedBody.html : ''
   const imageFailures =
     preparedBody.pageId === page?.id ? preparedBody.imageFailures : []
@@ -3154,16 +3199,17 @@ export function KnowledgePageEditor({
   useEffect(() => {
     // While editing, the editor holds the page: re-preparing on every
     // keystroke only handed the same document back to it and had it rebuilt.
-    if (editing) return
+    if (editing && preparedBody.version === editorVersion) return
     let live = true
     const prepare = urlImagesUnavailable.current
       ? prepareKnowledgeDocumentHtml(bodyDraft, packagePath, readPlatformFileBinary)
       : prepareKnowledgeDocumentHtmlWithUrls(bodyDraft, packagePath, fileUrlFor)
     void prepare.then(result => {
-      if (live) setPreparedBody({ pageId: page?.id ?? '', ...result })
+      if (live) setPreparedBody({ pageId: page?.id ?? '', version: editorVersion, ...result })
     })
     return () => { live = false }
-  }, [bodyDraft, editing, fileUrlFor, packagePath, page?.id])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bodyDraft, editing, editorVersion, fileUrlFor, packagePath, page?.id])
   // If this frame cannot show the shell's file URLs, go back to inlining.
   const urlImagesUnavailable = useRef(false)
   useEffect(() => {
@@ -3175,7 +3221,7 @@ export function KnowledgePageEditor({
     probe.onerror = () => {
       urlImagesUnavailable.current = true
       void prepareKnowledgeDocumentHtml(bodyDraft, packagePath, readPlatformFileBinary).then(result => {
-        if (live) setPreparedBody({ pageId: page?.id ?? '', ...result })
+        if (live) setPreparedBody({ pageId: page?.id ?? '', version: editorVersion, ...result })
       })
     }
     probe.src = first
@@ -3199,6 +3245,7 @@ export function KnowledgePageEditor({
       } else body = [bodyDraft, knowledgeHtmlToMarkdown(drop.html, packagePath), toMd(reference)].filter(Boolean).join('\n\n')
       const pageId = page.id
       if (latestDraftRef.current.page?.id === pageId) setBodyDraft(body)
+      noteSent(body)
       onSave(current => {
         let next = updateKnowledgePage(current, pageId, { body }, { actor: HUMAN_ACTIVITY_ACTOR })
         const currentPage = current.pages.find(candidate => candidate.id === pageId)
@@ -3231,6 +3278,10 @@ export function KnowledgePageEditor({
     setTitleDraft(page?.title ?? '')
     setBodyDraft(page?.body ?? '')
     setTagsDraft(page?.tags.join(', ') ?? '')
+    draftBase.current = { title: page?.title ?? '', body: page?.body ?? '', tags: page?.tags.join(', ') ?? '' }
+    sentBodies.current.clear()
+    setKeptNote(nextKeptNote.current)
+    nextKeptNote.current = ''
     setLinkTitle('')
     setLinkPath('')
     setChildTitle('')
@@ -3245,7 +3296,40 @@ export function KnowledgePageEditor({
     setTitleDraft(page?.title ?? '')
     setBodyDraft(page?.body ?? '')
     setTagsDraft(page?.tags.join(', ') ?? '')
+    draftBase.current = { title: page?.title ?? '', body: page?.body ?? '', tags: page?.tags.join(', ') ?? '' }
   }, [editing, page?.body, page?.tags, page?.title])
+
+  // While editing, the page can change under the drafts: another window, an agent, this app's other copy. What was not
+  // touched here takes the new version. Words typed here stay and go on being saved, and the other version is kept as a
+  // page of its own, so neither is lost and the person is told.
+  const pageTagsText = page?.tags.join(', ') ?? ''
+  useEffect(() => {
+    if (!editing || !page) return
+    const base = draftBase.current
+    if (page.title !== base.title) {
+      if (titleDraft === base.title) setTitleDraft(page.title)
+      base.title = page.title
+    }
+    if (pageTagsText !== base.tags) {
+      if (tagsDraft === base.tags) setTagsDraft(pageTagsText)
+      base.tags = pageTagsText
+    }
+    if (page.body === base.body) return
+    const elsewhere = !sentBodies.current.has(page.body) && page.body !== bodyDraft
+    const typedHere = bodyDraft !== base.body
+    base.body = page.body
+    if (!elsewhere) return
+    if (!typedHere) {
+      setBodyDraft(page.body)
+      setEditorVersion(version => version + 1)
+      return
+    }
+    const theirs = page
+    const at = new Date().toISOString()
+    onSave(current => keepKnowledgeVersion(current, theirs, at))
+    setKeptNote(`This page changed in another window while you were writing. Your words stay here, and the other version is kept as “${keptPageTitle(theirs.title, at)}”.`)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, page?.id, page?.body, page?.title, pageTagsText])
 
   const handledEditRequestNonce = useRef<number | null>(null)
   useEffect(() => {
@@ -3288,24 +3372,21 @@ export function KnowledgePageEditor({
     return () => {
       const latest = latestDraftRef.current
       if (!latest.editing || !latest.page || latest.page.id !== pageId) return
-      const tags = latest.tagsDraft.split(',').map(tag => tag.trim()).filter(Boolean)
-      if (
-        latest.titleDraft === latest.page.title &&
-        latest.bodyDraft === latest.page.body &&
-        tags.length === latest.page.tags.length &&
-        tags.every((tag, index) => tag === latest.page?.tags[index])
-      ) return
-      const editedPageId = latest.page.id
-      onSave(current => updateKnowledgePage(
-        current,
-        editedPageId,
-        {
-          title: latest.titleDraft,
-          body: normalizeWikiLinkEscapes(latest.bodyDraft),
-          tags,
-        },
-        { actor: HUMAN_ACTIVITY_ACTOR },
-      ))
+      const patch = ownDraftChanges(draftBase.current, latest)
+      if (!Object.keys(patch).length) return
+      const editedPage = latest.page
+      const at = new Date().toISOString()
+      // The page can be gone: deleted in another window while these words were being typed. It stays deleted; they stay too.
+      if (patch.body !== undefined) nextKeptNote.current = `“${editedPage.title}” was deleted in another window. The words you were typing are kept as “${keptPageTitle(editedPage.title, at)}”.`
+      onSave(current => {
+        if (current.pages.some(candidate => candidate.id === editedPage.id)) {
+          nextKeptNote.current = ''
+          return updateKnowledgePage(current, editedPage.id, patch, { actor: HUMAN_ACTIVITY_ACTOR })
+        }
+        return patch.body?.trim()
+          ? keepKnowledgeVersion(current, { ...editedPage, body: patch.body }, at)
+          : current
+      })
       recordKnowledgeEditSession(
         editBaselineRef.current,
         latest.titleDraft,
@@ -3316,9 +3397,10 @@ export function KnowledgePageEditor({
   }, [onSave, page?.id])
 
   useEffect(() => {
-    if (!editing || !page || bodyDraft === page.body) return
+    if (!editing || !page || bodyDraft === page.body || bodyDraft === draftBase.current.body) return
     const pageId = page.id
     const timer = window.setTimeout(() => {
+      noteSent(bodyDraft)
       onSave(current => updateKnowledgePage(
         current,
         pageId,
@@ -3391,32 +3473,11 @@ export function KnowledgePageEditor({
     [store, page],
   )
 
-  if (!page) {
-    return (
-      <StyledEditorPane {...compactPart('page')}>
-        <EmptyState
-          title="Select a page"
-          message="Choose a wiki page or note, or create one where it belongs."
-        />
-      </StyledEditorPane>
-    )
-  }
-
   const commitPage = (): void => {
     const pageId = page.id
-    onSave(current => updateKnowledgePage(
-      current,
-      pageId,
-      {
-        title: titleDraft,
-        body: normalizeWikiLinkEscapes(bodyDraft),
-        tags: tagsDraft
-          .split(',')
-          .map(tag => tag.trim())
-          .filter(Boolean),
-      },
-      { actor: HUMAN_ACTIVITY_ACTOR },
-    ))
+    const patch = ownDraftChanges(draftBase.current, { titleDraft, bodyDraft, tagsDraft })
+    if (patch.body !== undefined) noteSent(patch.body)
+    onSave(current => updateKnowledgePage(current, pageId, patch, { actor: HUMAN_ACTIVITY_ACTOR }))
   }
 
   const finishEditing = (): void => {
@@ -3618,6 +3679,7 @@ export function KnowledgePageEditor({
       visibleDraft.page?.id === destinationPageId &&
       (!expected || visibleDraft.bodyDraft === expected.baseBody)
     ) setBodyDraft(body)
+    noteSent(body)
     let applied = false
     onSave(current => {
       const destination = current.pages.find(candidate => candidate.id === destinationPageId)
@@ -3891,6 +3953,7 @@ export function KnowledgePageEditor({
                 Policy · {knowledgeStatus(page).replaceAll('-', ' ')}. Edits stay a draft until published in the full app.
               </p>
             ) : null}
+            {keptNote && <p role="status">{keptNote}</p>}
             {dropError && <p role="alert">{dropError}</p>}
             {galleryError && <p role="alert">{galleryError}</p>}
             {imageFailures.length ? (
@@ -3931,7 +3994,7 @@ export function KnowledgePageEditor({
                 <StyledWikiRule />
                 <StyledKnowledgeEditorFrame {...agentRefs(page)} {...compactPart('editor')}>
                   <DocumentEditor
-                    key={page.id}
+                    key={`${page.id}:${preparedBody.version}`}
                     ref={editorRef}
                     className="knowledge-page-editor"
                     value={editorHtml}

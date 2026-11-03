@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
+  fetchHeldCopy,
   fetchKnowledgeSettings,
   fetchShellPreferences,
   fetchOrganisationBinding,
@@ -31,12 +32,13 @@ export function usePureKnowledgeBoot(
       setBooting(true)
       setBootError(null)
       try {
-        const [prefs, appSettings, organisation] = await Promise.all([
+        const [prefs, appSettings, organisation, heldCopy] = await Promise.all([
           fetchShellPreferences(),
           fetchKnowledgeSettings(),
           fetchOrganisationBinding(),
+          fetchHeldCopy(),
         ])
-        if (!cancelled) setBoot({ prefs, appSettings, organisation })
+        if (!cancelled) setBoot({ prefs, appSettings, organisation, heldCopy })
       } catch (error) {
         if (!cancelled) {
           setBoot(null)

@@ -30,9 +30,11 @@ import type { KnowledgePage, KnowledgeStore } from '../lib/knowledgeTypes'
 
 const io = vi.hoisted(() => ({
   files: new Map<string, string>(),
+  stamps: new Map<string, string>(),
   storage: new Map<string, { value: unknown; version: string }>(),
   listeners: new Set<(change: { kind: string; path: string; source?: unknown }) => void>(),
   events: false,
+  failWrites: false,
   writer: null as unknown,
   /** One tick per bridge call, so two copies' read-then-write really can interleave. */
   tick: () => new Promise<void>(resolve => setTimeout(resolve, 0)),
@@ -48,7 +50,9 @@ vi.mock('../bridge/platformBridge', () => ({
   }),
   writeTextFile: vi.fn(async (path: string, value: string) => {
     await io.tick()
+    if (io.failWrites) throw new Error('Disk unavailable')
     io.files.set(path, value)
+    io.stamps.set(path, String(Math.random()))
     if (io.events) for (const listener of io.listeners) listener({ kind: 'content', path, source: io.writer })
   }),
   updateKnowledgeSettings: vi.fn(async (patch: unknown) => { io.settings.push(patch); return {} }),
@@ -57,10 +61,15 @@ vi.mock('../bridge/platformBridge', () => ({
 vi.mock('@purescience/platform-ui/bridge/fs', () => ({
   listPlatformFiles: vi.fn(async (path: string) => {
     await io.tick()
+    const under = [...io.files.keys()].filter(file => file.startsWith(`${path}/`))
+    const folders = new Set(under.map(file => file.slice(path.length + 1)).filter(rest => rest.includes('/')).map(rest => rest.split('/')[0]!))
     return {
-      entries: [...io.files.keys()]
-        .filter(file => file.startsWith(`${path}/`) && !file.slice(path.length + 1).includes('/'))
-        .map(file => ({ name: file.split('/').pop()!, path: file, isDirectory: false, byteLength: io.files.get(file)!.length, modifiedAt: '' })),
+      entries: [
+        ...[...folders].map(name => ({ name, path: `${path}/${name}`, isDirectory: true })),
+        ...under
+          .filter(file => !file.slice(path.length + 1).includes('/'))
+          .map(file => ({ name: file.split('/').pop()!, path: file, isDirectory: false, byteLength: io.files.get(file)!.length, modifiedAt: io.stamps.get(file) ?? '' })),
+      ],
     }
   }),
   deletePlatformFile: vi.fn(async (path: string) => {
@@ -160,9 +169,11 @@ const add = (title: string, body: string) => (current: KnowledgeStore): Knowledg
 
 beforeEach(() => {
   io.files.clear()
+  io.stamps.clear()
   io.storage.clear()
   io.listeners.clear()
   io.events = false
+  io.failWrites = false
   io.settings = []
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 })
@@ -277,6 +288,39 @@ describe('two copies, the same page', () => {
   })
 })
 
+describe('a save that failed', () => {
+  it('words waiting on a failed save, when the page is deleted elsewhere: it stays deleted and the words are kept', async () => {
+    const store = seed()
+    const doomed = store.pages.find(page => page.title === 'Shared')!
+    const a = await open()
+    const b = await open()
+    io.failWrites = true
+    await act(async () => { await b.current().saveStore(edit(doomed.id, 'words waiting in B', 1000)).catch(() => undefined) })
+    io.failWrites = false
+    expect(b.current().saveFailed).toBe(true)
+    await act(async () => { await a.current().saveStore(current => deleteKnowledgePage(current, doomed.id)) })
+    io.events = true
+    await act(async () => { for (const listener of io.listeners) listener({ kind: 'content', path: `${PACKAGE}/index.json` }) })
+    await settle(() => !pageIn(b.current(), 'Shared'))
+    await settle(() => onDisk().some(page => page.body === 'words waiting in B'))
+    expect(pageOnDisk('Shared')).toBeUndefined()
+    expect(onDisk().some(page => page.body === 'words waiting in B')).toBe(true)
+  })
+
+  it('a listing that fails is not taken for every page being deleted', async () => {
+    const store = seed()
+    const shared = store.pages.find(page => page.title === 'Shared')!
+    const copy = await open()
+    const { listPlatformFiles } = await import('@purescience/platform-ui/bridge/fs')
+    vi.mocked(listPlatformFiles).mockRejectedValueOnce(new Error('EIO'))
+    await act(async () => { await copy.current().saveStore(edit(shared.id, 'kept')).catch(() => undefined) })
+    expect(pageIn(copy.current(), 'Shared')?.body).toBe('kept')
+    expect(pageOnDisk('Shared')).toBeDefined()
+    await act(async () => { await copy.current().saveStore(current => current) })
+    expect(pageOnDisk('Shared')?.body).toBe('kept')
+  })
+})
+
 describe('an older snapshot', () => {
   it('opening, then saving at once with a view older than the file, loses nothing', async () => {
     const store = seed()
@@ -388,6 +432,69 @@ describe('proposals and history', () => {
     expect(proposals.find(change => change.id === changeId)?.status).toBe('accepted')
     expect(proposals.filter(change => change.status === 'pending')).toHaveLength(1)
   })
+})
+
+describe('many changes at once, in a shuffled order', () => {
+  it.each([1, 2, 3])('seed %i: every page is where it should be and both copies end up the same', async seedNumber => {
+    let state = seedNumber * 2654435761
+    const random = (below: number) => {
+      state = Math.imul(state ^ (state >>> 15), 2246822519) >>> 0
+      return state % below
+    }
+    seed()
+    const copies = [await open(), await open(true)]
+    const deleted = new Set<string>()
+    const deletedTitles = new Set<string>()
+    const added = new Set<string>()
+    const pagesNow = (copy: { current: () => Workspace }) => copy.current().store!.pages.filter(page => page.parentId && !page.tags.includes('kept-copy'))
+    const step = (copy: { current: () => Workspace }, at: number): Promise<void> => {
+      const known = pagesNow(copy)
+      const choice = random(4)
+      if (choice === 0 || !known.length) {
+        const title = `Page ${seedNumber}-${at}`
+        added.add(title)
+        return copy.current().saveStore(add(title, `first words of ${title}`))
+      }
+      const page = known[random(known.length)]!
+      if (choice === 1) {
+        deleted.add(page.id)
+        deletedTitles.add(page.title)
+        return copy.current().saveStore(current => deleteKnowledgePage(current, page.id))
+      }
+      return copy.current().saveStore(edit(page.id, `words ${seedNumber}-${at}`, at))
+    }
+    for (let at = 0; at < 24; at++) {
+      await act(async () => {
+        if (random(2)) await Promise.all(copies.map((copy, index) => step(copy, at * 2 + index)))
+        else await step(copies[random(2)]!, at * 2)
+      })
+    }
+    const look = async () => {
+      await act(async () => {
+        for (const listener of io.listeners) listener({ kind: 'content', path: `${PACKAGE}/index.json` })
+        window.dispatchEvent(new Event('focus'))
+      })
+      await settle(() => false, 500)
+    }
+    await look()
+    await look()
+
+    const disk = onDisk()
+    const seen = new Map<string, number>()
+    for (const page of disk) seen.set(page.id, (seen.get(page.id) ?? 0) + 1)
+    expect([...seen.values()].every(count => count === 1)).toBe(true)
+    for (const id of deleted) expect(seen.has(id)).toBe(false)
+    for (const title of added) {
+      if (!deletedTitles.has(title)) expect(disk.some(page => page.title === title)).toBe(true)
+    }
+    for (const copy of copies) {
+      const held = copy.current().store!.pages.map(page => `${page.id}:${page.body}`).sort()
+      expect(held).toEqual(disk.map(page => `${page.id}:${page.body}`).sort())
+    }
+    const index = JSON.parse(io.files.get(`${PACKAGE}/index.json`)!) as { spaces: unknown[] }
+    expect(index.spaces).toHaveLength(1)
+    expect(io.storage.get('knowledge-writer.json')?.value ?? null).toBeNull()
+  }, 30_000)
 })
 
 describe('picking up what the other copy did', () => {

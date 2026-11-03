@@ -183,6 +183,13 @@ the user's explicit direction. Write summaries as if they are the only
 line the user will read about the change — usually they are. Never
 describe a write as pending or awaiting review; it is done, say so.
 
+## Kept copies
+
+Several windows can have this library open. When two of them write the same page,
+the page keeps the newer words and the older become a page of their own, tagged
+`kept-copy`, titled "… (kept from another window, …)". Leave these alone unless
+asked: they are the person's words waiting for the person to decide.
+
 ## Output Style
 
 Return compact results. For reads, answer in prose from the pages —
