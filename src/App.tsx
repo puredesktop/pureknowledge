@@ -1,6 +1,7 @@
 import { recordUserOperation } from './bridge/knowledgeOperations'
 import { GuidanceDetails, GuidanceSearchDetails, GuidanceStatusFilter } from './components/KnowledgeGuidance'
-import { guidanceFilterLabel, type GuidanceFilter } from './lib/knowledgeGuidance'
+import { guidanceFilterLabel, guidanceMetadata, type GuidanceFilter } from './lib/knowledgeGuidance'
+import { isPolicy, knowledgeStatus } from './lib/organisationKnowledge.mjs'
 import { MenuButtonDropdown } from '@purescience/platform-ui/components/common/dropdown/MenuButtonDropdown'
 import { CollectionImage } from '@purescience/platform-editor/extensions/collectionImage.ts'
 import { useKnowledgeDrop } from './hooks/useKnowledgeDrop'
@@ -92,6 +93,7 @@ import {
 } from './bridge/platformBridge'
 import { KNOWLEDGE_APP_SLUG } from './constants'
 import { linkKnowledgeRefs } from './lib/knowledgeRefs'
+import { useCompactInRoom } from './hooks/useCompactInRoom'
 import { useKnowledgeAgentTools } from './hooks/useKnowledgeAgentTools'
 import { useKnowledgeMeaning } from './hooks/useKnowledgeMeaning'
 import { MeaningSearchLine } from './components/MeaningSearchLine'
@@ -2033,10 +2035,13 @@ export function KnowledgeWorkspace({
   boot,
   resourcePath,
   onResourceHandled,
+  compact = false,
 }: {
   boot: KnowledgeBootState
   resourcePath: string | null
   onResourceHandled: () => void
+  /** Held inside a page (useCompactInRoom): one job, the list of pages or one page. */
+  compact?: boolean
 }): React.ReactElement {
   const { store, storePath, loading, saving, error, saveFailed, saveStore, externalNotice } =
     useKnowledgeWorkspace(boot, resourcePath, onResourceHandled)
@@ -2083,6 +2088,15 @@ export function KnowledgeWorkspace({
     () => new Set(),
   )
   const [notesExpanded, setNotesExpanded] = useState(false)
+  // Compact only: whether the page is showing rather than the list. Never saved, and the whole app ignores it.
+  const [compactPageOpen, setCompactPageOpen] = useState(false)
+  // A new page from compact opens once the store has it. Holds the page that was active when it was asked for.
+  const compactNewPageFrom = useRef<string | null | undefined>(undefined)
+  useEffect(() => {
+    if (compactNewPageFrom.current === undefined || store?.activePageId === compactNewPageFrom.current) return
+    compactNewPageFrom.current = undefined
+    setCompactPageOpen(true)
+  }, [store?.activePageId])
 
   const activeSpace = useMemo(() => {
     if (!store) return null
@@ -2199,6 +2213,7 @@ export function KnowledgeWorkspace({
         return next
       })
       setActiveView('wiki')
+      setCompactPageOpen(true)
       mutate(current => {
         const selected = current.pages.find(page => page.id === pageId)
         if (!selected) return current
@@ -2288,6 +2303,16 @@ export function KnowledgeWorkspace({
     )
     setNewRootComposer(null)
     setNewRootTitle('')
+  }
+
+  const createCompactPage = (title: string): void => {
+    compactNewPageFrom.current = store.activePageId
+    mutate(current => createKnowledgePage(
+      current,
+      { spaceId: activeSpace.id, kind: 'wiki', parentId: activeSpace.rootPageId, title, tags: [] },
+      { actor: HUMAN_ACTIVITY_ACTOR },
+    ))
+    recordUserOperation('page.create', `Created page "${title.trim()}" in ${activeSpace.name}`)
   }
 
   const startChildPage = (
@@ -2424,9 +2449,34 @@ export function KnowledgeWorkspace({
     )
   }
 
+  const compactHide = compact ? { 'data-compact-hide': '' } : undefined
+  const compactView = compact
+    ? { 'data-compact-view': compactPageOpen && activePage ? 'page' : 'list' }
+    : undefined
+
   return (
-    <StyledWorkspace>
-      <StyledAppHeader>
+    <StyledWorkspace {...compactView}>
+      {compact && (error || externalNotice) ? (
+        <div className="knowledge-compact-notice" role={error ? 'alert' : 'status'}>
+          <span>
+            {error
+              ? saveFailed
+                ? `This change was not saved. ${error.message}`
+                : error.message
+              : externalNotice}
+          </span>
+          {saveFailed && !saving ? (
+            <Button
+              variant="subtle"
+              size="sm"
+              onClick={() => void saveStore(store).catch(() => undefined)}
+            >
+              Retry save
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      <StyledAppHeader {...compactHide}>
         <StyledSpaceMenuWrap ref={spaceMenuRef}>
           <StyledSpaceButton
             type="button"
@@ -2512,7 +2562,7 @@ export function KnowledgeWorkspace({
           </StyledReviewBadge>
         )}
       </StyledAppHeader>
-      <StyledSidebar>
+      <StyledSidebar {...compactHide}>
         <StyledSearch>
           <SearchField
             value={query}
@@ -2780,6 +2830,15 @@ export function KnowledgeWorkspace({
           </>}
         </StyledPageList>
       </StyledSidebar>
+      {compact ? (
+        <CompactPageList
+          store={store}
+          query={query}
+          onQueryChange={setQuery}
+          onOpenPage={selectPage}
+          onCreatePage={createCompactPage}
+        />
+      ) : null}
 
       <KnowledgePageEditor
         packagePath={storePath}
@@ -2791,6 +2850,9 @@ export function KnowledgeWorkspace({
         onSave={mutate}
         onSaveGuidance={saveStore}
         editRequest={editRequest}
+        compact={compact
+          ? { onBack: () => setCompactPageOpen(false), status: saving ? 'Saving…' : error ? '' : 'Saved' }
+          : undefined}
       />
       {deleteCandidate ? (
         <>
@@ -3028,6 +3090,7 @@ export function KnowledgePageEditor({
   onSave,
   onSaveGuidance = onSave,
   editRequest,
+  compact,
 }: {
   packagePath: string
   store: KnowledgeStore
@@ -3038,7 +3101,11 @@ export function KnowledgePageEditor({
   onSave: (update: KnowledgeStoreUpdate) => void
   onSaveGuidance?: (update: KnowledgeStoreUpdate) => void | Promise<void>
   editRequest: { pageId: string; nonce: number } | null
+  /** Held by the Executive room: the way back to the list, and how saving stands. */
+  compact?: { onBack: () => void; status: string }
 }): React.ReactElement {
+  const compactHide = compact ? { 'data-compact-hide': '' } : undefined
+  const compactPart = (part: string) => (compact ? { 'data-compact-part': part } : undefined)
   const [titleDraft, setTitleDraft] = useState('')
   const [bodyDraft, setBodyDraft] = useState('')
   const [tagsDraft, setTagsDraft] = useState('')
@@ -3326,7 +3393,7 @@ export function KnowledgePageEditor({
 
   if (!page) {
     return (
-      <StyledEditorPane>
+      <StyledEditorPane {...compactPart('page')}>
         <EmptyState
           title="Select a page"
           message="Choose a wiki page or note, or create one where it belongs."
@@ -3766,12 +3833,27 @@ export function KnowledgePageEditor({
         aria-label="Add images to gallery"
         onChange={event => void handleGalleryFiles(event)}
       />
-      <StyledEditorPane>
+      <StyledEditorPane {...compactPart('page')}>
+        {compact ? (
+          <div className="knowledge-compact-bar">
+            <button
+              type="button"
+              className="knowledge-compact-back"
+              onClick={() => {
+                if (editing) finishEditing()
+                compact.onBack()
+              }}
+            >
+              ← All pages
+            </button>
+            <span aria-live="polite">{compact.status}</span>
+          </div>
+        ) : null}
         <StyledEditorBody>
-        <StyledMainEditor ref={dropSurface}>
-          <StyledWikiSurface data-agent-ref="@open" data-agent-label={pageDisplayTitle(page, activeSpace.rootPageId)}>
+        <StyledMainEditor ref={dropSurface} {...compactPart('scroller')}>
+          <StyledWikiSurface data-agent-ref="@open" data-agent-label={pageDisplayTitle(page, activeSpace.rootPageId)} {...compactPart('sheet')}>
             <StyledWikiPageHeader>
-              <StyledBreadcrumbLane>
+              <StyledBreadcrumbLane {...compactHide}>
                 <PathBreadcrumbs
                   aria-label="Page path"
                   items={[
@@ -3797,11 +3879,18 @@ export function KnowledgePageEditor({
                 />
               ) : (
                 <StyledReadTitle>
-                  {pageDisplayTitle(page, activeSpace.rootPageId)}
+                  {compact && page.id === activeSpace.rootPageId
+                    ? activeSpace.name
+                    : pageDisplayTitle(page, activeSpace.rootPageId)}
                 </StyledReadTitle>
               )}
             </StyledWikiPageHeader>
             <GuidanceDetails key={page.id} page={page} store={store} onSave={onSaveGuidance} onSelectPage={onSelectPage} />
+            {compact && isPolicy(page) ? (
+              <p className="knowledge-compact-note" role="note">
+                Policy · {knowledgeStatus(page).replaceAll('-', ' ')}. Edits stay a draft until published in the full app.
+              </p>
+            ) : null}
             {dropError && <p role="alert">{dropError}</p>}
             {galleryError && <p role="alert">{galleryError}</p>}
             {imageFailures.length ? (
@@ -3829,12 +3918,18 @@ export function KnowledgePageEditor({
                       ? 'Editing directory index'
                       : 'Editing page body'}
                   </span>
-                  <Button variant="subtle" onClick={finishEditing}>
-                    Done
-                  </Button>
+                  {compact ? (
+                    <StyledEditPageButton variant="subtle" onClick={finishEditing}>
+                      Done
+                    </StyledEditPageButton>
+                  ) : (
+                    <Button variant="subtle" onClick={finishEditing}>
+                      Done
+                    </Button>
+                  )}
                 </StyledWikiMeta>
                 <StyledWikiRule />
-                <StyledKnowledgeEditorFrame {...agentRefs(page)}>
+                <StyledKnowledgeEditorFrame {...agentRefs(page)} {...compactPart('editor')}>
                   <DocumentEditor
                     key={page.id}
                     ref={editorRef}
@@ -3852,16 +3947,17 @@ export function KnowledgePageEditor({
               <>
                 <StyledWikiMeta>
                   <StyledChipRow>
-                    <Badge tone="neutral">{page.kind}</Badge>
+                    {compact ? null : <Badge tone="neutral">{page.kind}</Badge>}
                     <span>Last edited {formatDate(page.updatedAt)}</span>
-                    {page.kind === 'note' ? (
+                    {compact && page.guidanceStatus ? <span>{guidanceMetadata(page).statusLabel}</span> : null}
+                    {page.kind === 'note' && !compact ? (
                       <Button variant="subtle" size="sm" onClick={promoteNote}>
                         Promote to wiki
                       </Button>
                     ) : null}
                   </StyledChipRow>
                   <StyledChipRow>
-                    <StyledActivityWrap ref={activityRef}>
+                    <StyledActivityWrap ref={activityRef} {...compactHide}>
                       <StyledIconButton
                         type="button"
                         aria-label="Page activity"
@@ -3903,7 +3999,7 @@ export function KnowledgePageEditor({
             )}
 
             {page.kind === 'wiki' ? (
-              <StyledWikiIndex>
+              <StyledWikiIndex {...compactHide}>
                 <StyledWikiIndexTitle>
                   {page.id === activeSpace.rootPageId
                     ? 'Wiki index'
@@ -4036,7 +4132,7 @@ export function KnowledgePageEditor({
 
             <PolicyPanel page={page} editing={editing} onChange={changed=>onSave(current=>{const live=current.pages.find(p=>p.id===page.id);if(JSON.stringify(live)!==JSON.stringify(page))throw Error('This policy changed. Read its current wording before publishing.');return updateKnowledgePage(current,page.id,{governance:changed.governance},{actor:HUMAN_ACTIVITY_ACTOR})})}/>
             {editing ? (
-              <StyledPageMetadataPanel>
+              <StyledPageMetadataPanel {...compactHide}>
                 <PagePlacement page={page} store={store} onChange={parentId=>onSave(current=>updateKnowledgePage(current,page.id,{parentId},{actor:HUMAN_ACTIVITY_ACTOR}))}/>
                 <StyledFieldLabel htmlFor="page-tags">Tags</StyledFieldLabel>
                 <StyledTagFieldLane>
@@ -4083,7 +4179,7 @@ export function KnowledgePageEditor({
                   </Button>
                 </StyledQuietForm>
               </StyledPageMetadataPanel>
-            ) : page.links.length ? (
+            ) : page.links.length && !compact ? (
               <>
                 <StyledFieldLabel>Linked resources</StyledFieldLabel>
                 {page.links.map(link => (
@@ -4091,7 +4187,7 @@ export function KnowledgePageEditor({
                 ))}
               </>
             ) : null}
-            <StyledPageFooter>
+            <StyledPageFooter {...compactHide}>
               {wikiLinks.length ? (
                 <StyledFooterSection>
                   <StyledFooterLabel>Linked pages</StyledFooterLabel>
@@ -4247,6 +4343,114 @@ function agentRefs(page: Pick<KnowledgePage, 'id' | 'slug' | 'title'>): { 'data-
   }
 }
 
+/** The compact list: every page, most useful first, narrowed by a search. Reads the store and changes nothing itself. */
+function CompactPageList({
+  store,
+  query,
+  onQueryChange,
+  onOpenPage,
+  onCreatePage,
+}: {
+  store: KnowledgeStore
+  query: string
+  onQueryChange: (query: string) => void
+  onOpenPage: (pageId: string) => void
+  onCreatePage: (title: string) => void
+}): React.ReactElement {
+  const [creating, setCreating] = useState(false)
+  const [newTitle, setNewTitle] = useState('')
+  const searching = Boolean(query.trim())
+  const rows = useMemo(() => {
+    // A space's root page is its index, not something to look up: it shows only when a search finds it.
+    const roots = new Set(store.spaces.map(space => space.rootPageId))
+    return rankKnowledgePages(store, query, store.pages.length, 'all')
+      .filter(hit => searching || !roots.has(hit.page.id))
+      .map(hit => ({ page: hit.page, text: pageSnippet({ ...hit.page, body: hit.snippet }) }))
+  }, [query, searching, store])
+
+  if (!searching && !rows.length) {
+    return (
+      <div className="knowledge-compact-list">
+        <div className="knowledge-compact-start">
+          <p className="knowledge-compact-quiet">No pages here yet.</p>
+          {creating ? (
+            <form
+              className="knowledge-compact-start-action"
+              onSubmit={event => {
+                event.preventDefault()
+                if (!newTitle.trim()) return
+                onCreatePage(newTitle)
+                setCreating(false)
+                setNewTitle('')
+              }}
+            >
+              <TextField
+                autoFocus
+                aria-label="Page title"
+                value={newTitle}
+                placeholder="Page title"
+                onChange={event => setNewTitle(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Escape') setCreating(false)
+                }}
+              />
+              <StyledEditPageButton variant="subtle" type="submit" disabled={!newTitle.trim()}>Add</StyledEditPageButton>
+            </form>
+          ) : (
+            <div className="knowledge-compact-start-action">
+              <StyledEditPageButton variant="subtle" onClick={() => setCreating(true)}>New page</StyledEditPageButton>
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="knowledge-compact-list">
+      <div className="knowledge-compact-search">
+        <SearchField
+          aria-label="Search knowledge"
+          value={query}
+          placeholder="Search knowledge"
+          onValueChange={onQueryChange}
+          onClear={() => onQueryChange('')}
+        />
+      </div>
+      {rows.length ? (
+        <ul className="knowledge-compact-rows">
+          {rows.map(({ page, text }) => {
+            const space = store.spaces.find(candidate => candidate.id === page.spaceId)
+            const meta = [
+              page.kind === 'note' ? 'Note' : '',
+              page.guidanceStatus ? guidanceMetadata(page).statusLabel : '',
+              store.spaces.length > 1 ? space?.name ?? '' : '',
+            ].filter(Boolean).join(' · ')
+            return (
+              <li key={page.id}>
+                <button
+                  type="button"
+                  className="knowledge-compact-row"
+                  {...agentRefs(page)}
+                  onClick={() => onOpenPage(page.id)}
+                >
+                  <span className="knowledge-compact-row-title">
+                    {page.id === space?.rootPageId ? space.name : page.title}
+                  </span>
+                  <span className="knowledge-compact-row-meta">{meta}</span>
+                  <span className="knowledge-compact-row-text">{text}</span>
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      ) : (
+        <p className="knowledge-compact-quiet" role="status">No pages match “{query.trim()}”.</p>
+      )}
+    </div>
+  )
+}
+
 function KnowledgeLinkRow({
   link,
 }: {
@@ -4292,13 +4496,15 @@ function KnowledgeLinkRow({
 
 export function App(): React.ReactElement {
   const { error: bridgeError, ready, meta } = usePlatformBridge()
+  const compact = useCompactInRoom()
+  const compactFrame = compact ? { 'data-compact-room': '' } : undefined
   const { boot, bootError, booting, retry } = usePureKnowledgeBoot(ready)
   const { resource: viewportResource, clearResource } =
     usePlatformViewportResource(ready, meta)
 
   if (bridgeError) {
     return (
-      <AppFrame>
+      <AppFrame {...compactFrame}>
         <AppShell>
           <EmptyState
             tone="error"
@@ -4318,7 +4524,7 @@ export function App(): React.ReactElement {
       : 'Waiting for PureScience shell bridge…'
 
     return (
-      <AppFrame>
+      <AppFrame {...compactFrame}>
         <AppShell>
           <EmptyState
             tone={bootError ? 'error' : 'neutral'}
@@ -4332,12 +4538,13 @@ export function App(): React.ReactElement {
   }
 
   return (
-    <AppFrame>
+    <AppFrame {...compactFrame}>
       <AppShell>
         <KnowledgeWorkspace
           boot={boot}
           resourcePath={viewportResource?.path?.trim() || null}
           onResourceHandled={clearResource}
+          compact={compact}
         />
       </AppShell>
     </AppFrame>
