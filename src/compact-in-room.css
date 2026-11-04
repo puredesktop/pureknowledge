@@ -70,14 +70,16 @@
 }
 [data-compact-room] .knowledge-compact-row-title {
   overflow: hidden;
-  font-family: var(--pureknowledge-font-display);
-  font-size: 16px;
+  font-size: 14px;
+  font-weight: 600;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 [data-compact-room] .knowledge-compact-row-text {
   grid-column: 1 / -1;
+  display: block;
+  min-width: 0;
   overflow: hidden;
   margin-top: 2px;
   color: var(--pureknowledge-content-muted);
@@ -93,14 +95,13 @@
   white-space: nowrap;
 }
 
-/* Nothing there, or nothing found: one quiet line, in the reading face. */
+/* Nothing there, or nothing found: one quiet line. */
 [data-compact-room] .knowledge-compact-quiet {
   margin: 0;
   padding: 28px 24px 14px;
   color: var(--pureknowledge-content-muted);
-  font-family: var(--pureknowledge-font-display);
-  font-size: var(--pure-chrome-reading-size, 16px);
-  line-height: var(--pure-chrome-reading-line, 1.6);
+  font-size: 13px;
+  line-height: 1.5;
   text-align: center;
 }
 [data-compact-room] .knowledge-compact-start {
@@ -230,10 +231,10 @@
 /* Held inside an entry of the room: one surface, flat on the paper, with square edges and no second sheet. */
 html[data-held-in-room],
 html[data-held-in-room] body,
-html[data-held-in-room] [data-compact-room] {
+[data-compact-room] {
   background: #ffffff;
 }
-html[data-held-in-room] [data-compact-room] [data-app='knowledge'] {
+[data-compact-room] [data-app='knowledge'] {
   --pureknowledge-bg: #ffffff;
   --pureknowledge-well: #ffffff;
   --pureknowledge-panel: #ffffff;
@@ -243,35 +244,35 @@ html[data-held-in-room] [data-compact-room] [data-app='knowledge'] {
   --pureknowledge-page: #ffffff !important;
   --pureknowledge-surround: #ffffff !important;
 }
-html[data-held-in-room] [data-compact-room] [data-compact-part='scroller'] {
+[data-compact-room] [data-compact-part='scroller'] {
   padding: 0;
 }
-html[data-held-in-room] [data-compact-room] [data-compact-part='sheet'] {
+[data-compact-room] [data-compact-part='sheet'] {
   padding: 18px 20px 40px;
   border-radius: 0;
   box-shadow: none;
 }
-html[data-held-in-room] [data-compact-room] [data-compact-part='editor'] {
+[data-compact-room] [data-compact-part='editor'] {
   border: 0;
   border-radius: 0;
 }
-html[data-held-in-room] [data-compact-room] [data-compact-part='editor'] [class*='EditorWrapper'] {
+[data-compact-room] [data-compact-part='editor'] [class*='EditorWrapper'] {
   border: 0;
   border-radius: 0;
   box-shadow: none;
 }
-html[data-held-in-room] [data-compact-room] [data-compact-part='editor'] .ProseMirror {
+[data-compact-room] [data-compact-part='editor'] .ProseMirror {
   padding-inline: 0;
 }
-html[data-held-in-room] [data-compact-room] [data-compact-part='editor'] .ProseMirror h1 {
+[data-compact-room] [data-compact-part='editor'] .ProseMirror h1 {
   font-size: 24px;
   line-height: 1.25;
 }
-html[data-held-in-room] [data-compact-room] :is(button, input, textarea, select) {
+[data-compact-room] :is(button, input, textarea, select) {
   border-radius: 0;
 }
-html[data-held-in-room] [data-compact-room] [data-editor-toolbar],
-html[data-held-in-room] [data-compact-room] [data-editor-toolbar] [role='toolbar'] {
+[data-compact-room] [data-editor-toolbar],
+[data-compact-room] [data-editor-toolbar] [role='toolbar'] {
   margin: 0;
   width: 100%;
   max-width: none;
@@ -282,7 +283,7 @@ html[data-held-in-room] [data-compact-room] [data-editor-toolbar] [role='toolbar
 }
 
 /* The room's paper is white in every theme, so a dark desktop must not leave light text on it. */
-html[data-held-in-room][data-platform-theme='dark'] [data-compact-room] {
+html[data-platform-theme='dark'] [data-compact-room] {
   color-scheme: light;
   --platform-colors-text: #1f2328;
   --platform-colors-text-secondary: #59616b;
@@ -303,11 +304,69 @@ html[data-held-in-room][data-platform-theme='dark'] [data-compact-room] {
   color: #1f2328;
 }
 /* The bar's controls take a colour fixed for the dark surface, which no token above reaches. */
-html[data-held-in-room][data-platform-theme='dark'] [data-compact-room] [data-editor-toolbar] * {
+html[data-platform-theme='dark'] [data-compact-room] [data-editor-toolbar] * {
   color: #59616b;
 }
-html[data-held-in-room][data-platform-theme='dark'] [data-compact-room] [data-app='knowledge'] {
+html[data-platform-theme='dark'] [data-compact-room] [data-app='knowledge'] {
   /* The dark accent is drawn for dark grounds: deepened here so links and Done still read on white. */
   --pureknowledge-accent: color-mix(in srgb, var(--pure-chrome-accent) 55%, #000000);
   --pureknowledge-focus: color-mix(in srgb, var(--pure-chrome-accent) 55%, #000000);
+}
+
+/* The held look: one muted accent, square 28px controls on hairlines, and the page itself on the same white as the list,
+   with no sheet, shadow or grey ground round it. Reading content keeps its serif. */
+[data-compact-room] [data-app='knowledge'],
+[data-compact-room] {
+  --pure-chrome-radius: 3px;
+  --pureknowledge-accent: #2f5d8c;
+  --pureknowledge-focus: #2f5d8c;
+  --pureknowledge-bg: #ffffff;
+  --pureknowledge-well: #ffffff;
+  --pureknowledge-panel: #ffffff;
+  --pureknowledge-content-bg: #ffffff;
+  --pureknowledge-content-subtle: #ffffff;
+  --pureknowledge-page: #ffffff;
+  --pureknowledge-surround: #ffffff;
+  --pureknowledge-border: #dde1e7;
+  --pureknowledge-border-soft: #dde1e7;
+}
+[data-compact-room] [data-compact-part='sheet'],
+[data-compact-room] [data-compact-part='sheet'] > * {
+  box-shadow: none;
+}
+[data-compact-room] [data-compact-part='sheet'] {
+  border: 0;
+  border-radius: 0;
+  background: #ffffff;
+}
+[data-compact-room] [data-compact-part='scroller'] {
+  padding: 0;
+  background: #ffffff;
+}
+[data-compact-room] [data-compact-part='sheet'] button {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 3px;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: none;
+}
+/* A date is not code: the page's own sans, not a monospace. */
+[data-compact-room] [data-compact-part='sheet'] time,
+[data-compact-room] [data-compact-part='sheet'] [class*='MetaText'],
+[data-compact-room] [data-compact-part='sheet'] [class*='Meta'] {
+  font-family: inherit;
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+[data-compact-room] .knowledge-compact-search input {
+  height: 28px;
+  border-radius: 3px;
+}
+[data-compact-room] .knowledge-compact-start-action button {
+  height: 28px;
+  border-radius: 3px;
+  font-size: 13px;
+  font-weight: 500;
 }
