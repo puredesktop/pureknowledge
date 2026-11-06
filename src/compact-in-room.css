@@ -1,3 +1,12 @@
+/* Follows the desk's theme: each colour is light-dark(its light value, its dark partner), the dark ones the held greys
+   of docs/held-apps.md. A light theme leaves the colour scheme as it was; a dark one says dark, and parts that asked
+   for light take --held-scheme instead. */
+[data-compact-room]:is([data-platform-theme='dark'] *),
+html[data-held-in-room]:has([data-compact-room])[data-platform-theme='dark'] {
+  color-scheme: dark;
+  --held-scheme: dark;
+}
+
 /* Compact PureKnowledge, for the Executive room (useCompactInRoom). The frame carries data-compact-room only then, and
    every rule here starts from it, so with compact off nothing in this file applies (the one exception is the white
    ground under a held frame, below). Chrome is hidden, not removed: it stays mounted, so state and agent tools live on. */
@@ -232,17 +241,17 @@
 html[data-held-in-room],
 html[data-held-in-room] body,
 [data-compact-room] {
-  background: #ffffff;
+  background: light-dark(#ffffff, #1c1c1c);
 }
 [data-compact-room] [data-app='knowledge'] {
-  --pureknowledge-bg: #ffffff;
-  --pureknowledge-well: #ffffff;
-  --pureknowledge-panel: #ffffff;
-  --pureknowledge-content-bg: #ffffff;
-  --pureknowledge-content-subtle: #ffffff;
+  --pureknowledge-bg: light-dark(#ffffff, #1c1c1c);
+  --pureknowledge-well: light-dark(#ffffff, #1c1c1c);
+  --pureknowledge-panel: light-dark(#ffffff, #1c1c1c);
+  --pureknowledge-content-bg: light-dark(#ffffff, #1c1c1c);
+  --pureknowledge-content-subtle: light-dark(#ffffff, #1c1c1c);
   /* Important: the app sets these two per appearance with selectors stronger than this one. */
-  --pureknowledge-page: #ffffff !important;
-  --pureknowledge-surround: #ffffff !important;
+  --pureknowledge-page: light-dark(#ffffff, #1c1c1c) !important;
+  --pureknowledge-surround: light-dark(#ffffff, #1c1c1c) !important;
 }
 [data-compact-room] [data-compact-part='scroller'] {
   padding: 0;
@@ -279,38 +288,7 @@ html[data-held-in-room] body,
   border-radius: 0;
   border-width: 0 0 1px;
   box-shadow: none;
-  background: #ffffff;
-}
-
-/* The room's paper is white in every theme, so a dark desktop must not leave light text on it. */
-html[data-platform-theme='dark'] [data-compact-room] {
-  color-scheme: light;
-  --platform-colors-text: #1f2328;
-  --platform-colors-text-secondary: #59616b;
-  --platform-colors-border: #e3e5e8;
-  --pure-chrome-soft: #59616b;
-  --pure-chrome-muted: #7b838d;
-  --pure-chrome-line: #e3e5e8;
-  --pure-chrome-hover: #f3f4f6;
-  --pure-chrome-surface: #ffffff;
-  --pure-chrome-well: #ffffff;
-  --pure-chrome-bar: #ffffff;
-  --pure-chrome-paper: #ffffff;
-  --pure-chrome-secondary: #59616b;
-  --pure-chrome-tertiary: #7b838d;
-  --platform-colors-surface: #ffffff;
-  --platform-colors-surface-hover: #f3f4f6;
-  --platform-colors-elevated: #ffffff;
-  color: #1f2328;
-}
-/* The bar's controls take a colour fixed for the dark surface, which no token above reaches. */
-html[data-platform-theme='dark'] [data-compact-room] [data-editor-toolbar] * {
-  color: #59616b;
-}
-html[data-platform-theme='dark'] [data-compact-room] [data-app='knowledge'] {
-  /* The dark accent is drawn for dark grounds: deepened here so links and Done still read on white. */
-  --pureknowledge-accent: color-mix(in srgb, var(--pure-chrome-accent) 55%, #000000);
-  --pureknowledge-focus: color-mix(in srgb, var(--pure-chrome-accent) 55%, #000000);
+  background: light-dark(#ffffff, #1c1c1c);
 }
 
 /* The held look: one muted accent, square 28px controls on hairlines, and the page itself on the same white as the list,
@@ -318,17 +296,17 @@ html[data-platform-theme='dark'] [data-compact-room] [data-app='knowledge'] {
 [data-compact-room] [data-app='knowledge'],
 [data-compact-room] {
   --pure-chrome-radius: 3px;
-  --pureknowledge-accent: #2f5d8c;
-  --pureknowledge-focus: #2f5d8c;
-  --pureknowledge-bg: #ffffff;
-  --pureknowledge-well: #ffffff;
-  --pureknowledge-panel: #ffffff;
-  --pureknowledge-content-bg: #ffffff;
-  --pureknowledge-content-subtle: #ffffff;
-  --pureknowledge-page: #ffffff;
-  --pureknowledge-surround: #ffffff;
-  --pureknowledge-border: #dde1e7;
-  --pureknowledge-border-soft: #dde1e7;
+  --pureknowledge-accent: light-dark(#2f5d8c, #7fafe3);
+  --pureknowledge-focus: light-dark(#2f5d8c, #7fafe3);
+  --pureknowledge-bg: light-dark(#ffffff, #1c1c1c);
+  --pureknowledge-well: light-dark(#ffffff, #1c1c1c);
+  --pureknowledge-panel: light-dark(#ffffff, #1c1c1c);
+  --pureknowledge-content-bg: light-dark(#ffffff, #1c1c1c);
+  --pureknowledge-content-subtle: light-dark(#ffffff, #1c1c1c);
+  --pureknowledge-page: light-dark(#ffffff, #1c1c1c);
+  --pureknowledge-surround: light-dark(#ffffff, #1c1c1c);
+  --pureknowledge-border: light-dark(#dde1e7, #3a3a3a);
+  --pureknowledge-border-soft: light-dark(#dde1e7, #3a3a3a);
 }
 [data-compact-room] [data-compact-part='sheet'],
 [data-compact-room] [data-compact-part='sheet'] > * {
@@ -337,11 +315,11 @@ html[data-platform-theme='dark'] [data-compact-room] [data-app='knowledge'] {
 [data-compact-room] [data-compact-part='sheet'] {
   border: 0;
   border-radius: 0;
-  background: #ffffff;
+  background: light-dark(#ffffff, #1c1c1c);
 }
 [data-compact-room] [data-compact-part='scroller'] {
   padding: 0;
-  background: #ffffff;
+  background: light-dark(#ffffff, #1c1c1c);
 }
 [data-compact-room] [data-compact-part='sheet'] button {
   height: 28px;
