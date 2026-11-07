@@ -2857,7 +2857,7 @@ export function KnowledgeWorkspace({
               <Button ref={cancelDeleteRef} variant="subtle" onClick={() => setDeleteCandidate(null)}>
                 Cancel
               </Button>
-              <Button variant="danger" onClick={confirmDeletePage}>
+              <Button variant="danger" data-pureknowledge-danger onClick={confirmDeletePage}>
                 Delete
               </Button>
             </StyledChipRow>
@@ -2952,7 +2952,7 @@ function KnowledgeAgentReview({
           {pendingChanges.length ? (
             <StyledReviewActions>
               <Button
-                variant="primary"
+                variant="primary" data-pureknowledge-primary
                 disabled={saving}
                 onClick={onApproveAll}
               >
@@ -3017,7 +3017,7 @@ function KnowledgeAgentReview({
                         Accept
                       </Button>
                       <Button
-                        variant="danger"
+                        variant="danger" data-pureknowledge-danger
                         size="sm"
                         disabled={saving}
                         onClick={() => onReject(change.id)}
@@ -4349,7 +4349,7 @@ function OpenPageEditor({
                 Cancel
               </Button>
               <Button
-                variant="danger"
+                variant="danger" data-pureknowledge-danger
                 onClick={() => {
                   saveGalleryBody(
                     removeKnowledgeGalleryImage(
