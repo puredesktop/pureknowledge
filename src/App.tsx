@@ -187,7 +187,8 @@ const DeleteDialogStyle = createGlobalStyle`
 const StyledAppRoot = styled.div`
   /* The pane is wide enough for page titles to read whole. */
   --pure-chrome-sidebar-width: 340px;
-  --pureknowledge-bg: var(--platform-colors-bg);
+  /* The page ground is white (ui/look.ts); parts are told apart by hairlines and a shade of grey. */
+  --pureknowledge-bg: var(--n-sheet, var(--platform-colors-bg));
   --pureknowledge-well: var(--pure-chrome-well);
   --pureknowledge-panel: var(--pure-chrome-surface);
   --pureknowledge-panel-subtle: var(--pure-chrome-well);
@@ -196,9 +197,8 @@ const StyledAppRoot = styled.div`
   /* The article is read on a page: white in light, the elevated surface in dark,
      over the well in glass and PureBook's grey in White. */
   --pureknowledge-page: var(--platform-colors-elevated, #ffffff);
-  --pureknowledge-surround: var(--pure-chrome-well);
+  --pureknowledge-surround: var(--n-panel, var(--pure-chrome-well));
   :root:not([data-platform-theme='dark']) & { --pureknowledge-page: #ffffff; }
-  :root[data-platform-appearance='white']:not([data-platform-theme='dark']) & { --pureknowledge-surround: #eceef1; }
   --pureknowledge-content-subtle: var(--pure-chrome-well);
   --pureknowledge-content-text: var(--platform-colors-text);
   --pureknowledge-content-muted: var(--pure-chrome-soft);
@@ -210,10 +210,12 @@ const StyledAppRoot = styled.div`
   --pureknowledge-text: var(--platform-colors-text);
   --pureknowledge-muted: var(--pure-chrome-soft);
   --pureknowledge-faint: var(--pure-chrome-muted);
-  --pureknowledge-accent: var(--pure-chrome-accent);
+  /* Actions and links are ink, never the app's colour; the colour is kept for the main action and the selected look. */
+  --pureknowledge-accent: var(--n-ink, var(--pure-chrome-accent));
   --pureknowledge-focus: var(--pure-chrome-accent);
   --pureknowledge-font-display: var(--platform-typography-font-family-content);
-  --pureknowledge-font-mono: var(--platform-typography-font-family-mono);
+  /* Meta, counts and headers in the platform sans (the old family look used mono). */
+  --pureknowledge-font-mono: var(--platform-typography-font-family);
   --pureknowledge-font-size-label: var(--pure-chrome-label-size);
   --pureknowledge-font-size-meta: var(--pure-chrome-meta-size);
   --pureknowledge-font-size-body: var(--pure-chrome-reading-size);
@@ -474,28 +476,15 @@ const StyledPageRow = styled.div<{ $active: boolean; $depth?: number }>`
   padding: 2px var(--pureknowledge-space-lg) 2px var(--pureknowledge-space-md);
   padding-left: ${({ $depth = 0 }) => 14 + $depth * 16}px;
   border: 0;
-  border-left: 3px solid
-    ${({ $active }) => ($active ? 'var(--pure-chrome-accent)' : 'transparent')};
   border-radius: 0;
-  background: ${({ $active }) =>
-    $active ? 'var(--pure-chrome-selection)' : 'transparent'};
+  background: ${({ $active }) => ($active ? 'var(--p-chosen)' : 'transparent')};
+  box-shadow: ${({ $active }) => ($active ? 'var(--p-chosen-edge)' : 'none')};
   color: var(--pureknowledge-text);
   font-size: var(--pure-chrome-ui-size);
   text-align: left;
 
-  &::before {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    width: 3px;
-    background: ${({ $active }) =>
-      $active ? 'var(--pure-chrome-accent)' : 'transparent'};
-    content: '';
-  }
-
   &:hover {
-    background: var(--pure-chrome-hover);
+    background: ${({ $active }) => ($active ? 'var(--p-chosen)' : 'var(--pure-chrome-hover)')};
   }
 `
 
@@ -530,7 +519,7 @@ const StyledSearchResult = styled(StyledPageSelect)`
   display: block;
   width: 100%;
   padding: 8px 10px;
-  border-radius: 6px;
+  border-radius: 3px;
   overflow-wrap: anywhere;
   &:hover { background: var(--pure-chrome-hover); }
   &:focus-visible { outline: 2px solid currentColor; }
@@ -691,7 +680,7 @@ const StyledExplorerButton = styled.button`
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--pureknowledge-accent);
+  color: var(--pureknowledge-muted);
   font-family: var(--platform-typography-font-family);
   font-size: var(--pure-chrome-ui-size);
   font-weight: 500;
@@ -876,18 +865,7 @@ const StyledContext = styled.aside`
 
   > label {
     position: relative;
-    margin-left: 10px;
     color: var(--pureknowledge-accent);
-  }
-
-  > label::before {
-    position: absolute;
-    top: 0.08em;
-    bottom: 0.08em;
-    left: -10px;
-    width: 3px;
-    background: var(--pureknowledge-accent);
-    content: '';
   }
 `
 
@@ -1051,7 +1029,7 @@ const StyledIconButton = styled.button`
   width: var(--pure-chrome-control-height);
   height: var(--pure-chrome-control-height);
   border: 1px solid var(--pure-chrome-line);
-  border-radius: 7px;
+  border-radius: 3px;
   background: var(--pure-chrome-surface);
   color: var(--pureknowledge-content-muted);
   cursor: pointer;
@@ -1098,26 +1076,27 @@ const StyledWikiMeta = styled(MetaText)`
   }
 `
 
-// Edit page is the one accent control on the page: an outlined 28px control.
+// Edit page: a raised plain button on a firm edge, with its word.
 const StyledEditPageButton = styled(Button)`
   && {
     min-height: var(--pure-chrome-control-height);
     padding: 0 12px;
-    border: 1px solid var(--pure-chrome-line);
-    border-radius: 7px;
-    background: var(--pure-chrome-surface);
-    color: var(--pureknowledge-accent);
+    border: 1px solid var(--n-btn-line, var(--pure-chrome-line));
+    border-bottom-color: var(--n-btn-foot, var(--pure-chrome-line));
+    border-radius: 3px;
+    background: var(--n-sheet, var(--pure-chrome-surface));
+    color: var(--pureknowledge-text);
     font-family: var(--platform-typography-font-family);
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 600;
     line-height: 1;
-    box-shadow: none;
+    box-shadow: 0 1px 1px rgb(0 0 0 / 0.08);
   }
 
   &&:hover:not(:disabled) {
-    border-color: var(--pure-chrome-soft);
-    background: var(--pure-chrome-hover);
-    color: var(--pureknowledge-accent);
+    border-color: var(--n-btn-foot, var(--pure-chrome-soft));
+    background: var(--n-hover, var(--pure-chrome-hover));
+    color: var(--pureknowledge-text);
   }
 `
 
@@ -1135,7 +1114,7 @@ const StyledAssetLoadWarning = styled.div`
   margin: 0 0 var(--pureknowledge-space-lg);
   padding: 10px 12px;
   border: 1px solid var(--platform-colors-warning, #a66d16);
-  border-radius: 7px;
+  border-radius: 3px;
   background: var(--pure-chrome-well);
   color: var(--pureknowledge-content-text);
   font-family: var(--platform-typography-font-family);
@@ -1176,7 +1155,7 @@ const StyledImagePreview = styled.figure`
     max-width: 100%;
     max-height: calc(100vh - 190px);
     object-fit: contain;
-    border-radius: 10px;
+    border-radius: 3px;
     box-shadow: 0 18px 60px rgb(0 0 0 / 0.24);
   }
 
@@ -1369,9 +1348,13 @@ const StyledWikiBody = styled(ReadingSurface)`
     outline-offset: 3px;
   }
 
+  /* A link to another page: ink with a hairline underline. */
   a[data-wiki-title] {
     color: var(--pureknowledge-accent);
-    text-decoration: none;
+    text-decoration: underline;
+    text-decoration-color: var(--n-strong, currentColor);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
     cursor: pointer;
   }
 
@@ -1434,7 +1417,7 @@ const StyledWikiBody = styled(ReadingSurface)`
     margin: 0 0 6px auto;
     padding: 3px 10px;
     border: 1px solid var(--pure-chrome-line, rgba(127, 127, 127, 0.35));
-    border-radius: 999px;
+    border-radius: 3px;
     background: transparent;
     color: var(--pureknowledge-content-muted, inherit);
     font: 500 12px/1.4 var(--platform-typography-font-family, system-ui);
