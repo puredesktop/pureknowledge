@@ -1,5 +1,6 @@
 /** Merge content written by another app instance into the local state. */
 import { latestKnowledgePages, serializePageFile } from './knowledgePages'
+import { mergeProposals } from './knowledgeSaveMerge'
 import type { KnowledgePage, KnowledgeStore } from './knowledgeTypes'
 
 /** Does a changed path belong to this package? */
@@ -72,9 +73,11 @@ export function mergeExternalKnowledgeStore(
   const localPagesById = new Map(local.pages.map(page => [page.id, page]))
   const incomingIds = new Set(incoming.pages.map(page => page.id))
 
+  let keptLocalCount = 0
   const pages = incoming.pages.map(incomingPage => {
     const localPage = localPagesById.get(incomingPage.id)
     if (!localPage || localPage === incomingPage) return incomingPage
+    if (serializePageFile(localPage) === serializePageFile(incomingPage)) return incomingPage
     const localAt = Date.parse(localPage.updatedAt)
     const incomingAt = Date.parse(incomingPage.updatedAt)
     if (
@@ -84,8 +87,17 @@ export function mergeExternalKnowledgeStore(
           Number.isFinite(incomingAt) &&
           localAt > incomingAt
     ) {
-      conflicts.push(localPage.title)
-      conflictIds.push(localPage.id)
+      keptLocalCount += 1
+      const saved = durableById.get(incomingPage.id)
+      const incomingChanged =
+        !durable ||
+        !saved ||
+        (saved !== incomingPage &&
+          serializePageFile(saved) !== serializePageFile(incomingPage))
+      if (incomingChanged) {
+        conflicts.push(localPage.title)
+        conflictIds.push(localPage.id)
+      }
       return localPage
     }
     return incomingPage
@@ -127,10 +139,9 @@ export function mergeExternalKnowledgeStore(
   }
 
   const activity = mergeById(incoming.activity, local.activity, item => item.at)
-  const agentChanges = mergeById(
-    incoming.agentChanges ?? [],
+  const agentChanges = mergeProposals(
     local.agentChanges ?? [],
-    item => item.proposedAt,
+    incoming.agentChanges ?? [],
   )
 
   const activeSpaceId = spaces.some(space => space.id === local.activeSpaceId)
@@ -161,7 +172,7 @@ export function mergeExternalKnowledgeStore(
     conflictIds,
     deletedWithWords,
     changedFromIncoming:
-      conflicts.length > 0 ||
+      keptLocalCount > 0 ||
       localOnlyPages.length > 0 ||
       spaces.length !== incoming.spaces.length,
   }

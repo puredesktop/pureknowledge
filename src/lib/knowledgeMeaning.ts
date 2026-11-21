@@ -121,10 +121,31 @@ export function knowledgePagePassages(page: KnowledgePage): KnowledgePassage[] {
     words = 0
   }
   let offset = 0
+  let fenceChar: '`' | '~' | null = null
+  let fenceLen = 0
   for (const raw of page.body.split('\n')) {
     const lineStart = offset
     offset += raw.length + 1
-    const title = /^#{1,6}\s+(.+)$/.exec(raw)
+    const cleanLine = raw.endsWith('\r') ? raw.slice(0, -1) : raw
+    const fenceMatch = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(cleanLine)
+    if (fenceMatch) {
+      const marker = fenceMatch[1]!
+      if (!fenceChar) {
+        fenceChar = marker[0] as '`' | '~'
+        fenceLen = marker.length
+        continue
+      }
+      if (
+        marker[0] === fenceChar &&
+        marker.length >= fenceLen &&
+        new RegExp(`^[ \\t]{0,3}${fenceChar}{${fenceLen},}[ \\t]*$`).test(cleanLine)
+      ) {
+        fenceChar = null
+        fenceLen = 0
+        continue
+      }
+    }
+    const title = !fenceChar ? /^#{1,6}\s+(.+)$/.exec(cleanLine) : null
     if (title) {
       flush()
       heading = cleanForReading(title[1])

@@ -103,7 +103,7 @@ export interface KnowledgeAgentChangePatch {
   link?: Partial<KnowledgeLink>
   links?: Partial<KnowledgeLink>[]
   guidanceStatus?: GuidanceStatus | null
-  lastChecked?: KnowledgeCheck
+  lastChecked?: KnowledgeCheck | null
   replacementPageId?: string | null
   /** page.merge: the surviving page the source page merges into. */
   mergeIntoPageId?: string

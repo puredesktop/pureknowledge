@@ -20,7 +20,7 @@ export const GUIDANCE_FILTERS = [
 export type GuidanceFilter = (typeof GUIDANCE_FILTERS)[number]
 export type GuidancePatch = {
   guidanceStatus?: GuidanceStatus | null
-  lastChecked?: KnowledgePage['lastChecked']
+  lastChecked?: KnowledgePage['lastChecked'] | null
   replacementPageId?: string | null
 }
 
@@ -51,7 +51,11 @@ export function validateGuidancePatch(
     !Object.hasOwn(GUIDANCE_LABELS, patch.guidanceStatus)
   )
     throw new Error('Status must be Draft, Current, Retired or unmarked.')
-  if (patch.lastChecked !== undefined && !isKnowledgeCheck(patch.lastChecked)) {
+  if (
+    patch.lastChecked !== undefined &&
+    patch.lastChecked !== null &&
+    !isKnowledgeCheck(patch.lastChecked)
+  ) {
     throw new Error('Record a reviewer and a valid ISO review date/time.')
   }
   if (

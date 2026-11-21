@@ -2,15 +2,18 @@ import {
   absoluteCollectionAssetPath,
   COLLECTION_ASSET_SRC_ATTR,
   isDisplayableAbsoluteSource,
-  prepareCollectionDocumentHtml,
-  relativeAssetSrcForHtml,
-  relativizeCollectionAssetPath,
   type ReadCollectionBinary,
 } from '@purescience/platform-ui/bridge/collectionDocumentHtml'
 import {
   knowledgeMarkdownToHtml,
   upgradeLegacyKnowledgeGalleries,
 } from './knowledgeGallery'
+import {
+  hasDangerousSvgContent,
+  isAbsolutePathInsidePackage,
+  resolveSafePackageRelativeAssetPath,
+  sanitizeHtml,
+} from './sanitizeHtml'
 
 export interface KnowledgeImageLoadFailure {
   path: string
@@ -31,8 +34,26 @@ export interface KnowledgeImagePreview {
 /** The shell streams package files to app frames through this scheme. */
 export const SHELL_FILE_URL_PREFIX = 'purescience-fs://'
 
+const ALLOWED_INLINE_IMAGE_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/svg+xml',
+])
+
 function isShownSource(src: string): boolean {
-  return isDisplayableAbsoluteSource(src) || src.startsWith(SHELL_FILE_URL_PREFIX)
+  return isDisplayableAbsoluteSource(src)
+}
+
+function isPreviewableImage(image: Element): boolean {
+  const src = image.getAttribute('src')?.trim() ?? ''
+  if (!src) return false
+  if (isDisplayableAbsoluteSource(src)) return true
+  return (
+    src.startsWith(SHELL_FILE_URL_PREFIX) &&
+    Boolean(image.getAttribute(COLLECTION_ASSET_SRC_ATTR)?.trim())
+  )
 }
 
 function makeImagesPreviewable(html: string): string {
@@ -40,8 +61,7 @@ function makeImagesPreviewable(html: string): string {
   const document = new DOMParser().parseFromString(html, 'text/html')
   let changed = false
   for (const image of Array.from(document.querySelectorAll('img[src]'))) {
-    const src = image.getAttribute('src')?.trim() ?? ''
-    if (!isShownSource(src)) continue
+    if (!isPreviewableImage(image)) continue
     const alt = image.getAttribute('alt')?.trim()
     image.setAttribute('data-knowledge-image-preview', '')
     image.setAttribute('role', 'button')
@@ -88,23 +108,48 @@ export type FileUrlFor = (absolutePath: string) => Promise<string>
  * only when it scrolls near. The relative path stays on the image so saving
  * writes it back unchanged.
  */
+function decodeBase64Safe(base64: string): string | null {
+  try {
+    const clean = base64.replace(/\s+/g, '')
+    if (!clean || clean.length % 4 === 1 || !/^[A-Za-z0-9+/=]+$/.test(clean)) {
+      return null
+    }
+    if (typeof atob === 'function') {
+      const raw = atob(clean)
+      const bytes = new Uint8Array(raw.length)
+      for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i)
+      return new TextDecoder().decode(bytes)
+    }
+    if (typeof Buffer !== 'undefined') {
+      return Buffer.from(clean, 'base64').toString('utf8')
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 export async function prepareKnowledgeDocumentHtmlWithUrls(
   markdown: string,
   packagePath: string,
   fileUrlFor: FileUrlFor,
 ): Promise<PreparedKnowledgeDocument> {
   const failures = new Map<string, KnowledgeImageLoadFailure>()
-  const html = upgradeLegacyKnowledgeGalleries(knowledgeMarkdownToHtml(markdown))
+  const html = sanitizeHtml(
+    upgradeLegacyKnowledgeGalleries(knowledgeMarkdownToHtml(markdown)),
+  )
   if (!html.trim() || !packagePath.trim()) return { html: makeImagesPreviewable(html), imageFailures: [] }
   const document = new DOMParser().parseFromString(html, 'text/html')
   const images = Array.from(document.querySelectorAll('img'))
   await Promise.all(images.map(async image => {
     const src = image.getAttribute('src')?.trim()
     if (!src || isShownSource(src)) return
-    const relative = relativeAssetSrcForHtml(src, packagePath)
+    const relative = resolveSafePackageRelativeAssetPath(src, packagePath)
     if (!relative) return
+    const absolutePath = absoluteCollectionAssetPath(packagePath, relative)
+    if (!isAbsolutePathInsidePackage(absolutePath, packagePath)) return
     try {
-      const url = await fileUrlFor(absoluteCollectionAssetPath(packagePath, relative))
+      const url = await fileUrlFor(absolutePath)
       image.setAttribute('src', url)
       image.setAttribute(COLLECTION_ASSET_SRC_ATTR, relative)
       image.setAttribute('loading', 'lazy')
@@ -133,31 +178,47 @@ export async function prepareKnowledgeDocumentHtml(
   readBinary: ReadCollectionBinary,
 ): Promise<PreparedKnowledgeDocument> {
   const failures = new Map<string, KnowledgeImageLoadFailure>()
-  const reportingReader: ReadCollectionBinary = async absolutePath => {
+  const html = sanitizeHtml(
+    upgradeLegacyKnowledgeGalleries(knowledgeMarkdownToHtml(markdown)),
+  )
+  if (!html.trim() || !packagePath.trim()) {
+    return { html: makeImagesPreviewable(html), imageFailures: [] }
+  }
+  const document = new DOMParser().parseFromString(html, 'text/html')
+  const images = Array.from(document.querySelectorAll('img'))
+  for (const image of images) {
+    const src = image.getAttribute('src')?.trim()
+    if (!src || isShownSource(src)) continue
+    const relative = resolveSafePackageRelativeAssetPath(src, packagePath)
+    if (!relative) continue
+    const absolutePath = absoluteCollectionAssetPath(packagePath, relative)
+    if (!isAbsolutePathInsidePackage(absolutePath, packagePath)) continue
     try {
-      return await readBinary(absolutePath)
+      const result = await readBinary(absolutePath)
+      const normalizedMime = result.mimeType.trim().toLowerCase()
+      if (!ALLOWED_INLINE_IMAGE_MIME_TYPES.has(normalizedMime)) {
+        throw new Error(`Unsupported inline image MIME type "${result.mimeType}"`)
+      }
+      if (normalizedMime === 'image/svg+xml') {
+        const decodedSvg = decodeBase64Safe(result.base64)
+        if (decodedSvg === null || hasDangerousSvgContent(decodedSvg)) {
+          throw new Error('SVG asset contains active, malformed, or external content')
+        }
+      }
+      image.setAttribute('src', `data:${normalizedMime};base64,${result.base64}`)
+      image.setAttribute(COLLECTION_ASSET_SRC_ATTR, relative)
     } catch (error) {
-      const path =
-        relativizeCollectionAssetPath(absolutePath, packagePath) ?? absolutePath
       const message = error instanceof Error ? error.message : String(error)
-      if (!failures.has(path)) {
-        const failure = { path, message }
-        failures.set(path, failure)
+      if (!failures.has(relative)) {
+        failures.set(relative, { path: relative, message })
         console.warn(
-          `[PureKnowledge] Could not load inline image "${path}": ${message}`,
+          `[PureKnowledge] Could not load inline image "${relative}": ${message}`,
         )
       }
-      throw error
     }
   }
-
-  const html = await prepareCollectionDocumentHtml(
-    upgradeLegacyKnowledgeGalleries(knowledgeMarkdownToHtml(markdown)),
-    packagePath,
-    reportingReader,
-  )
   return {
-    html: makeImagesPreviewable(html),
+    html: makeImagesPreviewable(document.body.innerHTML),
     imageFailures: [...failures.values()],
   }
 }
