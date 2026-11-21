@@ -58,7 +58,15 @@ vi.mock('@purescience/platform-ui/bridge/fs', () => ({
   deletePlatformFile: vi.fn(async (path: string) => {
     io.files.delete(path)
   }),
-  renamePlatformFile: vi.fn(async () => undefined),
+  renamePlatformFile: vi.fn(async (path: string, newName: string) => {
+    const existing = io.files.get(path)
+    if (existing === undefined) return
+    const slash = path.lastIndexOf('/')
+    const dir = slash >= 0 ? path.slice(0, slash) : ''
+    const nextPath = dir ? `${dir}/${newName}` : newName
+    io.files.delete(path)
+    io.files.set(nextPath, existing)
+  }),
 }))
 vi.mock('@purescience/platform-ui/bridge/documents', () => ({
   registerPlatformAppObject: vi.fn(async () => undefined),
@@ -223,13 +231,44 @@ describe('knowledge workspace reliability', () => {
     expect(io.files.get(`${A}/index.json`)).toBe('{ damaged')
   })
 
-  it('reports unreadable page content rather than loading a truncated store', async () => {
+  it('reports unreadable page content while isolating it so valid pages still load', async () => {
     seed(A, 'A')
     io.files.set(`${A}/pages/broken.md`, 'not a page file')
     await render()
     expect(current.error?.message).toContain('broken.md')
-    expect(current.store).toBeNull()
+    expect(current.store).not.toBeNull()
+    expect(current.store!.pages.length).toBeGreaterThan(0)
     expect(io.writes).toEqual([])
+  })
+
+  it('isolates corrupt activity.json and proposals.json without bricking the KB load, and backs up corrupt activity before overwriting', async () => {
+    seed(A, 'A')
+    io.files.set(`${A}/activity.json`, '{corrupt json')
+    io.files.set(`${A}/proposals.json`, '{"not":"an-array"}')
+    await render()
+    expect(current.store).not.toBeNull()
+    expect(current.store!.pages.length).toBeGreaterThan(0)
+    expect(current.store!.activity).toEqual([])
+    expect(current.store!.agentChanges).toEqual([])
+    expect(current.error?.message).toContain('activity.json')
+    expect(current.error?.message).toContain('proposals.json')
+    expect(io.writes).toEqual([])
+
+    const next = createKnowledgePage(current.store!, {
+      spaceId: current.store!.activeSpaceId,
+      parentId: current.store!.spaces[0]!.rootPageId,
+      kind: 'wiki',
+      title: 'After Corrupt Activity',
+    })
+    await act(async () => {
+      await current.saveStore(next)
+    })
+    const backupKey = [...io.files.keys()].find(path =>
+      path.startsWith(`${A}/activity.json.corrupt-`),
+    )
+    expect(backupKey).toBeTruthy()
+    expect(io.files.get(backupKey!)).toBe('{corrupt json')
+    expect(current.error?.message).toContain('activity.json')
   })
 
   it('does not reload the workspace when only callback identity changes', async () => {

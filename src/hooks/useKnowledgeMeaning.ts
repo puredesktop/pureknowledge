@@ -146,7 +146,15 @@ export function useKnowledgeMeaning(store: KnowledgeStore | null, storePath: str
         )
         indexRef.current = { path: goal.filePath, index: result.index }
         await writeTextFile(goal.filePath, serializeKnowledgeSearchIndex(result.index))
-        if (result.stopped) {
+        if (
+          result.stopped ||
+          target.current?.filePath !== goal.filePath ||
+          target.current?.modelId !== goal.modelId
+        ) {
+          again.current = true
+          continue
+        }
+        if (pagesRef.current !== latest || again.current) {
           again.current = true
           continue
         }
@@ -161,10 +169,14 @@ export function useKnowledgeMeaning(store: KnowledgeStore | null, storePath: str
       running.current = false
     }
   }, [heldCopy])
+  useEffect(() => {
+    setProgress(null)
+    setFailure(null)
+  }, [filePath])
   const pages = store?.pages
   useEffect(() => {
     if (!modelId || !dimensions || !pages) return
-    const timer = setTimeout(() => void refresh(), indexRef.current ? UPDATE_DELAY_MS : 0)
+    const timer = setTimeout(() => void refresh(), indexRef.current?.path === filePath ? UPDATE_DELAY_MS : 0)
     return () => clearTimeout(timer)
   }, [attempt, dimensions, filePath, modelId, pages, refresh])
   useEffect(() => () => { target.current = null }, [])

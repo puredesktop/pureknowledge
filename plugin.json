@@ -75,7 +75,7 @@
               },
               "includeDrafts": {
                 "type": "boolean",
-                "description": "Explicitly inspect working policy drafts. False/default reads only human-published policy text; drafts are not company policy."
+                "description": "Explicitly inspect working policy drafts and archived pages. False/default reads only active, human-published policy text; drafts and archived pages are not current company policy."
               }
             }
           }
@@ -107,7 +107,7 @@
               },
               "includeDrafts": {
                 "type": "boolean",
-                "description": "Explicitly inspect working policy drafts. False/default reads only human-published policy text; drafts are not company policy."
+                "description": "Explicitly inspect working policy drafts and archived pages. False/default reads only active, human-published policy text; drafts and archived pages are not current company policy."
               }
             },
             "required": [

@@ -49,19 +49,28 @@ import { SegmentedControl } from '@purescience/platform-ui/components/common/but
 import { TextField } from '@purescience/platform-ui/components/common/inputs/TextField'
 import { WorkspacePicker } from '@purescience/platform-ui/components/common/inputs/WorkspacePicker'
 import {
-  MoreHorizontal,
+  Activity,
+  ArrowLeft,
+  ArrowRight,
+  Check,
   ChevronDown,
-  Clock,
   ChevronRight,
+  Clock,
+  Copy,
+  Download,
   FilePlus2,
   FileText,
   Folder,
   FolderOpen,
   FolderPlus,
   ListCollapse,
+  MoreHorizontal,
   Pencil,
+  RotateCcw,
+  Search,
   StickyNote,
   Trash2,
+  X,
 } from 'lucide-react'
 import { usePlatformBridge } from '@purescience/platform-ui/bridge/react/usePlatformBridge'
 import { usePlatformViewportResource } from '@purescience/platform-ui/bridge/react/usePlatformViewportResource'
@@ -123,8 +132,22 @@ import {
   manualKnowledgeLinkInput,
   rankKnowledgePages,
   rejectKnowledgeAgentChange,
+  removeKnowledgeLink,
+  renameKnowledgePageWithBacklinks,
+  renameKnowledgeSpace,
+  reviewKnowledgeStore,
+  rewriteWikiLinksForRename,
   updateKnowledgePage,
 } from './lib/knowledgeStore'
+import {
+  addHeadingAnchorsToHtml,
+  isAbsolutePathInsidePackage,
+  renderWikiLinksInHtml,
+  resolveSafePackageRelativeAssetPath,
+  sanitizeHtml,
+} from './lib/sanitizeHtml'
+import { WikiHealthPanel } from './components/WikiHealthPanel'
+import { QuickPageSwitcher } from './components/QuickPageSwitcher'
 import type {
   KnowledgeAgentChange,
   KnowledgeActivity,
@@ -140,7 +163,7 @@ const HUMAN_ACTIVITY_ACTOR = { type: 'human' as const, name: 'You' }
 /** Sentinel breadcrumb path for the space root (pages use their ids). */
 const SPACE_ROOT_CRUMB = '__space-root__'
 
-type KnowledgeView = 'wiki' | 'agent-review'
+type KnowledgeView = 'wiki' | 'agent-review' | 'health'
 type AgentReviewSort = 'newest' | 'agent'
 
 // Scope the compact treatment to this confirmation, including its portal.
@@ -498,8 +521,14 @@ const StyledPageSelect = styled.button`
   text-align: left;
   cursor: pointer;
 
-  &:focus {
+  &:focus:not(:focus-visible) {
     outline: none;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--pureknowledge-focus);
+    outline-offset: 2px;
+    border-radius: 2px;
   }
 `
 
@@ -1834,6 +1863,177 @@ const StyledDirectoryEntry = styled.button`
   }
 `
 
+const StyledNavButton = styled.button`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--pure-chrome-line);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--pureknowledge-muted);
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--pure-chrome-hover);
+    color: var(--pureknowledge-text);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--pureknowledge-focus);
+    outline-offset: 1px;
+  }
+
+  &:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+`
+
+const StyledTagChipButton = styled.button<{ $active?: boolean }>`
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid
+    ${({ $active }) =>
+      $active ? 'var(--pureknowledge-focus)' : 'var(--pureknowledge-border)'};
+  border-radius: 999px;
+  background: ${({ $active }) =>
+    $active ? 'var(--pure-chrome-selection, var(--pure-chrome-hover))' : 'var(--pure-chrome-well)'};
+  color: var(--pureknowledge-text);
+  font-family: var(--platform-typography-font-family);
+  font-size: 11px;
+  line-height: 1.5;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--pure-chrome-hover);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--pureknowledge-focus);
+    outline-offset: 1px;
+  }
+`
+
+const StyledTagFilterRow = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: 100%;
+`
+
+const StyledOutlineNav = styled.nav`
+  margin: 0 0 var(--pureknowledge-space-lg);
+  padding: 10px 14px;
+  border: 1px solid var(--pureknowledge-content-border-soft);
+  border-radius: var(--pureknowledge-radius-control);
+  background: var(--pureknowledge-content-subtle);
+  font-family: var(--platform-typography-font-family);
+  font-size: 12px;
+
+  summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--pureknowledge-content-muted);
+    letter-spacing: var(--pure-chrome-label-tracking);
+    text-transform: uppercase;
+    font-size: var(--pure-chrome-label-size);
+  }
+
+  ul {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+    display: grid;
+    gap: 2px;
+  }
+
+  button {
+    border: 0;
+    background: transparent;
+    color: var(--pureknowledge-content-text);
+    font: inherit;
+    text-align: left;
+    padding: 2px 0;
+    cursor: pointer;
+  }
+
+  button:hover {
+    text-decoration: underline;
+  }
+`
+
+const StyledNoticeBanner = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--pureknowledge-content-border);
+  border-radius: var(--pureknowledge-radius-control);
+  background: var(--pureknowledge-content-subtle);
+  color: var(--pureknowledge-content-text);
+  font-family: var(--platform-typography-font-family);
+  font-size: 12px;
+  line-height: 1.45;
+`
+
+const StyledReviewDiffWrap = styled.div`
+  padding: 0 var(--pureknowledge-space-lg) var(--pureknowledge-space-md);
+  border-bottom: 1px solid var(--pureknowledge-border-soft);
+  background: var(--pureknowledge-well);
+`
+
+const StyledDiffGrid = styled.div`
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+`
+
+const StyledDiffBlock = styled.div<{ $tone: 'before' | 'after' }>`
+  border: 1px solid var(--pureknowledge-border);
+  border-radius: var(--pureknowledge-radius-control);
+  background: var(--pureknowledge-panel);
+  overflow: hidden;
+
+  header {
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--pureknowledge-border-soft);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: ${({ $tone }) =>
+      $tone === 'before'
+        ? 'var(--platform-colors-danger, #b42318)'
+        : 'var(--platform-colors-success, #16794f)'};
+  }
+
+  pre {
+    margin: 0;
+    padding: 8px 10px;
+    max-height: 220px;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-family: var(--platform-typography-font-family-mono, monospace);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+`
+
+const StyledSpaceRenameSection = styled.div`
+  margin-top: var(--pureknowledge-space-md);
+  padding-top: var(--pureknowledge-space-md);
+  border-top: 1px solid var(--pureknowledge-border-soft);
+`
+
 //#endregion
 
 function AppShell({
@@ -1862,20 +2062,14 @@ function formatDate(date: string): string {
   }
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
-
 /** Plain-prose preview of a page body: wikilinks read as their titles,
  * markdown syntax is stripped rather than shown. */
 function pageSnippet(page: KnowledgePage): string {
   const text = normalizeWikiLinkEscapes(page.body)
-    .replace(/\[\[([^\]]+)\]\]/g, '$1')
+    .replace(
+      /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g,
+      (_m, target: string, display?: string) => (display?.trim() || target.trim()),
+    )
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/[*_`~]+/g, '')
@@ -2015,6 +2209,23 @@ function buildWikiRows(
   return rows
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  if (
+    target.tagName === 'INPUT' ||
+    target.tagName === 'TEXTAREA' ||
+    target.tagName === 'SELECT' ||
+    target.isContentEditable
+  ) {
+    return true
+  }
+  return Boolean(target.closest('.ProseMirror, [contenteditable="true"]'))
+}
+
+function hasOpenModal(): boolean {
+  return Boolean(document.querySelector('[data-selector="modal"]'))
+}
+
 export function KnowledgeWorkspace({
   boot,
   resourcePath,
@@ -2033,14 +2244,27 @@ export function KnowledgeWorkspace({
   useKnowledgeAgentTools(true, { store, saveStore, storePath, meaning })
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<GuidanceFilter>('all')
+  const [tagFilter, setTagFilter] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<Error | null>(null)
   const [spaceMenuOpen, setSpaceMenuOpen] = useState(false)
+  const [renamingSpace, setRenamingSpace] = useState(false)
+  const [renameSpaceDraft, setRenameSpaceDraft] = useState('')
+  const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false)
+  const [editToggleNonce, setEditToggleNonce] = useState(0)
+  const [navHistory, setNavHistory] = useState<{ stack: string[]; index: number }>({
+    stack: [],
+    index: -1,
+  })
   const [deleteCandidate, setDeleteCandidate] = useState<KnowledgePage | null>(
     null,
   )
   const cancelDeleteRef = useRef<HTMLButtonElement>(null)
   const spaceMenuRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    if (!spaceMenuOpen) return
+    if (!spaceMenuOpen) {
+      setRenamingSpace(false)
+      return
+    }
     const onPointerDown = (event: globalThis.MouseEvent): void => {
       const node = spaceMenuRef.current
       if (
@@ -2051,11 +2275,29 @@ export function KnowledgeWorkspace({
         setSpaceMenuOpen(false)
       }
     }
+    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (
+        event.defaultPrevented ||
+        quickSwitcherOpen ||
+        deleteCandidate ||
+        hasOpenModal()
+      ) {
+        return
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setSpaceMenuOpen(false)
+      }
+    }
     document.addEventListener('mousedown', onPointerDown)
-    return () => document.removeEventListener('mousedown', onPointerDown)
-  }, [spaceMenuOpen])
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [deleteCandidate, quickSwitcherOpen, spaceMenuOpen])
   const [newRootComposer, setNewRootComposer] = useState<
-    'page' | 'directory' | null
+    'page' | 'directory' | 'note' | null
   >(null)
   const [newRootTitle, setNewRootTitle] = useState('')
   const [newChildParentId, setNewChildParentId] = useState<string | null>(null)
@@ -2082,6 +2324,74 @@ export function KnowledgeWorkspace({
     setCompactPageOpen(true)
   }, [store?.activePageId])
 
+  useEffect(() => {
+    setNavHistory({ stack: [], index: -1 })
+  }, [storePath])
+
+  useEffect(() => {
+    const activeId = store?.activePageId
+    if (!activeId) return
+    setNavHistory(current => {
+      if (current.stack[current.index] === activeId) return current
+      const nextStack = [...current.stack.slice(0, current.index + 1), activeId].slice(-50)
+      return { stack: nextStack, index: nextStack.length - 1 }
+    })
+  }, [store?.activePageId])
+
+  useEffect(() => {
+    if (activeView === 'wiki') return
+    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (
+        event.defaultPrevented ||
+        quickSwitcherOpen ||
+        deleteCandidate ||
+        hasOpenModal()
+      ) {
+        return
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setActiveView('wiki')
+      }
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [activeView, deleteCandidate, quickSwitcherOpen])
+
+  useEffect(() => {
+    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (
+        event.defaultPrevented ||
+        !(event.metaKey || event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey
+      ) {
+        return
+      }
+      const key = event.key.toLowerCase()
+      if (key === 'k') {
+        if (deleteCandidate) return
+        if (!quickSwitcherOpen && (hasOpenModal() || isEditableTarget(event.target))) {
+          return
+        }
+        event.preventDefault()
+        setQuickSwitcherOpen(open => !open)
+      } else if (
+        key === 'e' &&
+        !quickSwitcherOpen &&
+        !deleteCandidate &&
+        !hasOpenModal() &&
+        !isEditableTarget(event.target)
+      ) {
+        event.preventDefault()
+        setActiveView('wiki')
+        setEditToggleNonce(nonce => nonce + 1)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [deleteCandidate, quickSwitcherOpen])
+
   const activeSpace = useMemo(() => {
     if (!store) return null
     return (
@@ -2095,6 +2405,33 @@ export function KnowledgeWorkspace({
     if (!store || !store.activePageId) return null
     return store.pages.find(page => page.id === store.activePageId) ?? null
   }, [store])
+
+  const allSpaceTags = useMemo(() => {
+    if (!store || !activeSpace) return []
+    const counts = new Map<string, number>()
+    for (const page of store.pages) {
+      if (page.spaceId !== activeSpace.id) continue
+      for (const tag of page.tags) {
+        if (!tag || tag === 'directory') continue
+        counts.set(tag, (counts.get(tag) ?? 0) + 1)
+      }
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([tag]) => tag)
+  }, [activeSpace, store])
+
+  useEffect(() => {
+    if (tagFilter && !allSpaceTags.includes(tagFilter)) setTagFilter(null)
+  }, [allSpaceTags, tagFilter])
+
+  const healthFindings = useMemo(
+    () =>
+      store && activeSpace
+        ? reviewKnowledgeStore(store, activeSpace.id, Date.now())
+        : [],
+    [activeSpace, store],
+  )
 
   // The search box and the searchKnowledge tool share one ranking. Words answer at once; meaning joins when the model
   // has read the question, a moment later, so typing never waits for it.
@@ -2133,8 +2470,12 @@ export function KnowledgeWorkspace({
           hit => hit.page,
         )
       : store.pages
-    return pages.filter(page => page.spaceId === activeSpace.id)
-  }, [activeSpace, meaningHits, query, statusFilter, store])
+    return pages.filter(
+      page =>
+        page.spaceId === activeSpace.id &&
+        (!tagFilter || page.tags.includes(tagFilter)),
+    )
+  }, [activeSpace, meaningHits, query, statusFilter, store, tagFilter])
 
   const wikiPages = useMemo(() => {
     if (!store || !activeSpace) return []
@@ -2153,13 +2494,13 @@ export function KnowledgeWorkspace({
   // focus. Search surfaces matching notes too.
   const notePages = useMemo(() => {
     if (!store || !activeSpace) return []
-    const base = query.trim() ? visiblePages : store.pages
+    const base = query.trim() || tagFilter ? visiblePages : store.pages
     return base
       .filter(
         page => page.spaceId === activeSpace.id && page.kind === 'note',
       )
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-  }, [activeSpace, query, store, visiblePages])
+  }, [activeSpace, query, store, tagFilter, visiblePages])
   const spaceAgentChanges = useMemo(
     () =>
       (store?.agentChanges ?? []).filter(
@@ -2173,8 +2514,15 @@ export function KnowledgeWorkspace({
   )
 
   const mutate = useCallback(
-    (update: KnowledgeStoreUpdate): void => {
-      void saveStore(update).catch(() => undefined)
+    async (update: KnowledgeStoreUpdate): Promise<boolean> => {
+      try {
+        await saveStore(update)
+        setActionError(null)
+        return true
+      } catch (cause) {
+        setActionError(cause instanceof Error ? cause : new Error(String(cause)))
+        return false
+      }
     },
     [saveStore],
   )
@@ -2198,7 +2546,7 @@ export function KnowledgeWorkspace({
       })
       setActiveView('wiki')
       setCompactPageOpen(true)
-      mutate(current => {
+      void mutate(current => {
         const selected = current.pages.find(page => page.id === pageId)
         if (!selected) return current
         return {
@@ -2211,22 +2559,60 @@ export function KnowledgeWorkspace({
     [mutate, store],
   )
 
+  const canGoBack = useMemo(() => {
+    if (!store || navHistory.index <= 0) return false
+    const pageIds = new Set(store.pages.map(page => page.id))
+    for (let i = navHistory.index - 1; i >= 0; i -= 1) {
+      if (pageIds.has(navHistory.stack[i]!)) return true
+    }
+    return false
+  }, [navHistory, store])
+
+  const canGoForward = useMemo(() => {
+    if (!store || navHistory.index >= navHistory.stack.length - 1) return false
+    const pageIds = new Set(store.pages.map(page => page.id))
+    for (let i = navHistory.index + 1; i < navHistory.stack.length; i += 1) {
+      if (pageIds.has(navHistory.stack[i]!)) return true
+    }
+    return false
+  }, [navHistory, store])
+
+  const navigateHistory = useCallback(
+    (direction: -1 | 1): void => {
+      if (!store) return
+      const pageIds = new Set(store.pages.map(page => page.id))
+      let nextIndex = navHistory.index + direction
+      while (nextIndex >= 0 && nextIndex < navHistory.stack.length) {
+        const targetId = navHistory.stack[nextIndex]!
+        if (pageIds.has(targetId)) {
+          setNavHistory(current => ({ ...current, index: nextIndex }))
+          selectPage(targetId)
+          return
+        }
+        nextIndex += direction
+      }
+    },
+    [navHistory, selectPage, store],
+  )
+
   usePlatformDeepLink('knowledge', pageId => {
     if (store?.pages.some(page => page.id === pageId)) selectPage(pageId)
   })
+
+  const displayError = actionError ?? error
 
   if (loading || !store || !activeSpace) {
     return (
       <EmptyState
         title="pure knowledge"
-        message={error ? error.message : 'Opening local knowledge store…'}
-        tone={error ? 'error' : 'neutral'}
+        message={displayError ? displayError.message : 'Opening local knowledge store…'}
+        tone={displayError ? 'error' : 'neutral'}
       />
     )
   }
 
   const selectSpace = (spaceId: string): void => {
-    mutate(current => {
+    void mutate(current => {
       const space = current.spaces.find(candidate => candidate.id === spaceId)
       const firstPage =
         (space?.rootPageId
@@ -2258,45 +2644,86 @@ export function KnowledgeWorkspace({
   }
 
   const createSpace = (name: string): void => {
-    if (!name.trim()) return
-    mutate(current => createKnowledgeSpace(current, { name }, { actor: HUMAN_ACTIVITY_ACTOR }))
-    recordUserOperation('space.create', `Created space "${name.trim()}"`)
+    const trimmed = name.trim()
+    if (!trimmed) return
+    void mutate(current =>
+      createKnowledgeSpace(current, { name: trimmed }, { actor: HUMAN_ACTIVITY_ACTOR }),
+    ).then(ok => {
+      if (ok) recordUserOperation('space.create', `Created space "${trimmed}"`)
+    })
+  }
+
+  const submitRenameSpace = (event: FormEvent): void => {
+    event.preventDefault()
+    const trimmed = renameSpaceDraft.trim()
+    if (!trimmed || trimmed === activeSpace.name) {
+      setRenamingSpace(false)
+      return
+    }
+    const spaceId = activeSpace.id
+    const previousName = activeSpace.name
+    void mutate(current =>
+      renameKnowledgeSpace(current, spaceId, trimmed, { actor: HUMAN_ACTIVITY_ACTOR }),
+    ).then(ok => {
+      if (ok) {
+        recordUserOperation('space.rename', `Renamed space "${previousName}" to "${trimmed}"`)
+        setRenamingSpace(false)
+      }
+    })
   }
 
   const addRootPage = (event: FormEvent): void => {
     event.preventDefault()
     if (!newRootTitle.trim() || !newRootComposer) return
+    const trimmedTitle = newRootTitle.trim()
     const isDirectory = newRootComposer === 'directory'
-    mutate(current => createKnowledgePage(
-      current,
-      {
-        spaceId: activeSpace.id,
-        kind: 'wiki',
-        parentId: activeSpace.rootPageId,
-        title: newRootTitle,
-        body: isDirectory
-          ? createDirectoryIndexBody(newRootTitle)
-          : undefined,
-        tags: isDirectory ? ['directory'] : [],
-      },
-      { actor: HUMAN_ACTIVITY_ACTOR },
-    ))
-    recordUserOperation(
-      'page.create',
-      `Created ${isDirectory ? 'directory' : 'page'} "${newRootTitle.trim()}" in ${activeSpace.name}`,
-    )
+    const isNote = newRootComposer === 'note'
+    const spaceId = activeSpace.id
+    const spaceName = activeSpace.name
+    const rootPageId = activeSpace.rootPageId
+    void mutate(current =>
+      createKnowledgePage(
+        current,
+        {
+          spaceId,
+          kind: isNote ? 'note' : 'wiki',
+          parentId: isNote ? null : rootPageId,
+          title: trimmedTitle,
+          body: isDirectory
+            ? createDirectoryIndexBody(trimmedTitle)
+            : undefined,
+          tags: isDirectory ? ['directory'] : [],
+        },
+        { actor: HUMAN_ACTIVITY_ACTOR },
+      ),
+    ).then(ok => {
+      if (ok) {
+        recordUserOperation(
+          'page.create',
+          `Created ${isDirectory ? 'directory' : isNote ? 'note' : 'page'} "${trimmedTitle}" in ${spaceName}`,
+        )
+      }
+    })
+    if (isNote) setNotesExpanded(true)
     setNewRootComposer(null)
     setNewRootTitle('')
   }
 
   const createCompactPage = (title: string): void => {
+    const trimmed = title.trim()
     compactNewPageFrom.current = store.activePageId
-    mutate(current => createKnowledgePage(
-      current,
-      { spaceId: activeSpace.id, kind: 'wiki', parentId: activeSpace.rootPageId, title, tags: [] },
-      { actor: HUMAN_ACTIVITY_ACTOR },
-    ))
-    recordUserOperation('page.create', `Created page "${title.trim()}" in ${activeSpace.name}`)
+    const spaceId = activeSpace.id
+    const spaceName = activeSpace.name
+    const rootPageId = activeSpace.rootPageId
+    void mutate(current =>
+      createKnowledgePage(
+        current,
+        { spaceId, kind: 'wiki', parentId: rootPageId, title: trimmed, tags: [] },
+        { actor: HUMAN_ACTIVITY_ACTOR },
+      ),
+    ).then(ok => {
+      if (ok) recordUserOperation('page.create', `Created page "${trimmed}" in ${spaceName}`)
+    })
   }
 
   const startChildPage = (
@@ -2316,25 +2743,32 @@ export function KnowledgeWorkspace({
   const addChildPage = (event: FormEvent, parentId: string): void => {
     event.preventDefault()
     if (!newChildTitle.trim()) return
+    const trimmedTitle = newChildTitle.trim()
     const isDirectory = newChildKind === 'directory'
-    mutate(current => createKnowledgePage(
-      current,
-      {
-        spaceId: activeSpace.id,
-        kind: 'wiki',
-        parentId,
-        title: newChildTitle,
-        body: isDirectory
-          ? createDirectoryIndexBody(newChildTitle)
-          : undefined,
-        tags: isDirectory ? ['directory'] : [],
-      },
-      { actor: HUMAN_ACTIVITY_ACTOR },
-    ))
-    recordUserOperation(
-      'page.create',
-      `Created ${isDirectory ? 'directory' : 'page'} "${newChildTitle.trim()}"`,
-    )
+    const spaceId = activeSpace.id
+    void mutate(current =>
+      createKnowledgePage(
+        current,
+        {
+          spaceId,
+          kind: 'wiki',
+          parentId,
+          title: trimmedTitle,
+          body: isDirectory
+            ? createDirectoryIndexBody(trimmedTitle)
+            : undefined,
+          tags: isDirectory ? ['directory'] : [],
+        },
+        { actor: HUMAN_ACTIVITY_ACTOR },
+      ),
+    ).then(ok => {
+      if (ok) {
+        recordUserOperation(
+          'page.create',
+          `Created ${isDirectory ? 'directory' : 'page'} "${trimmedTitle}"`,
+        )
+      }
+    })
     setNewChildTitle('')
     setNewChildParentId(parentId)
     setExpandedPageIds(current => {
@@ -2345,7 +2779,7 @@ export function KnowledgeWorkspace({
   }
 
   const editTreePage = (pageId: string): void => {
-    mutate(current => {
+    void mutate(current => {
       const selected = current.pages.find(page => page.id === pageId)
       if (!selected) return current
       return {
@@ -2357,6 +2791,23 @@ export function KnowledgeWorkspace({
     setEditRequest({ pageId, nonce: Date.now() })
   }
 
+  const promoteTreeNote = (note: KnowledgePage): void => {
+    void mutate(current => {
+      const currentPage = current.pages.find(candidate => candidate.id === note.id)
+      if (!currentPage) return current
+      const rootPageId =
+        current.spaces.find(space => space.id === currentPage.spaceId)?.rootPageId ?? null
+      return updateKnowledgePage(
+        current,
+        currentPage.id,
+        { kind: 'wiki', parentId: rootPageId },
+        { actor: HUMAN_ACTIVITY_ACTOR },
+      )
+    }).then(ok => {
+      if (ok) recordUserOperation('page.promote', `Promoted note "${note.title}" to wiki`)
+    })
+  }
+
   // window.confirm is disabled by Chromium in cross-origin iframes — every
   // app frame is one — so destructive confirmation must be in-app.
   const deleteTreePage = (page: KnowledgePage): void => {
@@ -2366,43 +2817,156 @@ export function KnowledgeWorkspace({
 
   const confirmDeletePage = (): void => {
     if (!deleteCandidate) return
-    mutate(current => deleteKnowledgePage(current, deleteCandidate.id, {
-      actor: HUMAN_ACTIVITY_ACTOR,
-    }))
-    recordUserOperation(
-      'page.delete',
-      `Deleted page "${deleteCandidate.title}"`,
-    )
+    const target = deleteCandidate
     setDeleteCandidate(null)
+    void mutate(current =>
+      deleteKnowledgePage(current, target.id, {
+        actor: HUMAN_ACTIVITY_ACTOR,
+      }),
+    ).then(ok => {
+      if (ok) {
+        recordUserOperation(
+          'page.delete',
+          `Deleted ${target.kind === 'note' ? 'note' : 'page'} "${target.title}"`,
+        )
+      }
+    })
   }
 
   const approveAgentChange = (changeId: string): void => {
     const change = spaceAgentChanges.find(
       candidate => candidate.id === changeId,
     )
-    mutate(current => acceptKnowledgeAgentChange(current, changeId))
-    recordUserOperation(
-      'agentChange.accept',
-      `Accepted agent proposal${change ? `: ${change.title}` : ''}`,
-    )
+    void mutate(current => acceptKnowledgeAgentChange(current, changeId)).then(ok => {
+      if (ok) {
+        recordUserOperation(
+          'agentChange.accept',
+          `Accepted agent proposal${change ? `: ${change.title}` : ''}`,
+        )
+      }
+    })
   }
 
   const rejectAgentChange = (changeId: string): void => {
     const change = spaceAgentChanges.find(
       candidate => candidate.id === changeId,
     )
-    mutate(current => rejectKnowledgeAgentChange(current, changeId))
-    recordUserOperation(
-      'agentChange.reject',
-      `Rejected agent proposal${change ? `: ${change.title}` : ''}`,
-    )
+    void mutate(current => rejectKnowledgeAgentChange(current, changeId)).then(ok => {
+      if (ok) {
+        recordUserOperation(
+          'agentChange.reject',
+          `Rejected agent proposal${change ? `: ${change.title}` : ''}`,
+        )
+      }
+    })
+  }
+
+  const revertAgentChange = (change: KnowledgeAgentChange): void => {
+    if (change.status !== 'applied' || !change.pageId) return
+    const pageId = change.pageId
+    void mutate(current => {
+      const target = current.pages.find(candidate => candidate.id === pageId)
+      if (!target) {
+        throw new Error(`Cannot revert "${change.title}" because the page no longer exists.`)
+      }
+      if (change.changeType === 'page.create') {
+        if (current.spaces.some(space => space.rootPageId === pageId)) {
+          throw new Error(`Cannot revert space root "${target.title}".`)
+        }
+        return deleteKnowledgePage(current, pageId, { actor: HUMAN_ACTIVITY_ACTOR })
+      }
+      if (change.changeType === 'page.promote') {
+        return updateKnowledgePage(current, pageId, { kind: 'note' }, { actor: HUMAN_ACTIVITY_ACTOR })
+      }
+      if (change.changeType === 'page.update' && change.before !== undefined) {
+        const isGuidanceOnly =
+          change.patch.body === undefined &&
+          (change.patch.guidanceStatus !== undefined ||
+            change.patch.lastChecked !== undefined ||
+            change.patch.replacementPageId !== undefined)
+        if (isGuidanceOnly) {
+          type SavedGuidanceSnapshot = {
+            guidanceStatus?: KnowledgePage['guidanceStatus'] | null
+            lastChecked?: KnowledgePage['lastChecked'] | null
+            replacementPageId?: string | null
+          }
+          let prev: SavedGuidanceSnapshot | null = null
+          try {
+            const parsed: unknown = JSON.parse(change.before)
+            if (parsed && typeof parsed === 'object') {
+              prev = parsed as SavedGuidanceSnapshot
+            }
+          } catch {
+            prev = null
+          }
+          if (!prev) {
+            throw new Error(`Cannot revert "${change.title}" because its saved guidance snapshot is unreadable.`)
+          }
+          return updateKnowledgePage(
+            current,
+            pageId,
+            {
+              guidanceStatus: prev.guidanceStatus ?? null,
+              lastChecked: prev.lastChecked ?? null,
+              replacementPageId: prev.replacementPageId ?? null,
+            },
+            { actor: HUMAN_ACTIVITY_ACTOR },
+          )
+        }
+        return updateKnowledgePage(
+          current,
+          pageId,
+          { body: change.before },
+          { actor: HUMAN_ACTIVITY_ACTOR },
+        )
+      }
+      return current
+    }).then(ok => {
+      if (ok) {
+        recordUserOperation('agentChange.revert', `Reverted agent change: ${change.title}`)
+      }
+    })
+  }
+
+  const createPageFromHealth = (sourcePageId: string, missingTitle: string): void => {
+    const trimmed = missingTitle.trim()
+    if (!trimmed) return
+    const spaceId = activeSpace.id
+    const rootPageId = activeSpace.rootPageId
+    let created = false
+    void mutate(current => {
+      created = false
+      const existing = findPageByWikiTitle(current, spaceId, trimmed)
+      if (existing) {
+        return { ...current, activeSpaceId: existing.spaceId, activePageId: existing.id }
+      }
+      created = true
+      const source = current.pages.find(candidate => candidate.id === sourcePageId)
+      return createKnowledgePage(
+        current,
+        {
+          spaceId,
+          parentId: source?.kind === 'wiki' ? source.id : rootPageId,
+          kind: 'wiki',
+          title: trimmed,
+        },
+        { actor: HUMAN_ACTIVITY_ACTOR },
+      )
+    }).then(ok => {
+      if (ok) {
+        setActiveView('wiki')
+        if (created) {
+          recordUserOperation('page.create', `Created missing page "${trimmed}" from Wiki Health`)
+        }
+      }
+    })
   }
 
   const editAgentChange = (change: KnowledgeAgentChange): void => {
     if (change.pageId) {
       const pageId = change.pageId
       setActiveView('wiki')
-      mutate(current => {
+      void mutate(current => {
         const selected = current.pages.find(page => page.id === pageId)
         if (!selected) return current
         return { ...current, activeSpaceId: selected.spaceId, activePageId: pageId }
@@ -2413,16 +2977,47 @@ export function KnowledgeWorkspace({
 
   const approveAllAgentChanges = (): void => {
     if (!pendingAgentChanges.length) return
-    mutate(current => pendingAgentChanges.reduce(
-      (nextStore, change) => acceptKnowledgeAgentChange(nextStore, change.id),
-      current,
-    ))
-    recordUserOperation(
-      'agentChange.acceptAll',
-      `Accepted ${pendingAgentChanges.length} pending agent proposal${
-        pendingAgentChanges.length === 1 ? '' : 's'
-      }`,
-    )
+    const candidates = [...pendingAgentChanges]
+    let acceptedCount = 0
+    const failures: string[] = []
+    void mutate(current => {
+      let nextStore = current
+      acceptedCount = 0
+      failures.length = 0
+      for (const change of candidates) {
+        try {
+          const updated = acceptKnowledgeAgentChange(nextStore, change.id)
+          if (updated !== nextStore) {
+            nextStore = updated
+            acceptedCount += 1
+          }
+        } catch (cause) {
+          failures.push(
+            `${change.title}: ${cause instanceof Error ? cause.message : String(cause)}`,
+          )
+        }
+      }
+      if (acceptedCount === 0 && failures.length > 0) {
+        throw new Error(failures.join('; '))
+      }
+      return nextStore
+    }).then(ok => {
+      if (ok && acceptedCount > 0) {
+        recordUserOperation(
+          'agentChange.acceptAll',
+          `Accepted ${acceptedCount} pending agent proposal${
+            acceptedCount === 1 ? '' : 's'
+          }`,
+        )
+      }
+      if (failures.length > 0) {
+        setActionError(
+          new Error(
+            `Some proposals could not be accepted: ${failures.join('; ')}`,
+          ),
+        )
+      }
+    })
   }
 
   const pageCountsBySpace = new Map<string, number>()
@@ -2440,13 +3035,13 @@ export function KnowledgeWorkspace({
 
   return (
     <StyledWorkspace {...compactView}>
-      {compact && (error || externalNotice) ? (
-        <div className="knowledge-compact-notice" role={error ? 'alert' : 'status'}>
+      {compact && (displayError || externalNotice) ? (
+        <div className="knowledge-compact-notice" role={displayError ? 'alert' : 'status'}>
           <span>
-            {error
+            {displayError
               ? saveFailed
-                ? `This change was not saved. ${error.message}`
-                : error.message
+                ? `This change was not saved. ${displayError.message}`
+                : displayError.message
               : externalNotice}
           </span>
           {saveFailed && !saving ? (
@@ -2492,12 +3087,84 @@ export function KnowledgeWorkspace({
                   createSpace(name)
                 }}
               />
+              <StyledSpaceRenameSection>
+                {renamingSpace ? (
+                  <StyledInlineForm onSubmit={submitRenameSpace}>
+                    <TextField
+                      autoFocus
+                      aria-label="Rename space"
+                      value={renameSpaceDraft}
+                      onChange={event => setRenameSpaceDraft(event.target.value)}
+                      onKeyDown={event => {
+                        if (event.key === 'Escape') {
+                          event.stopPropagation()
+                          setRenamingSpace(false)
+                        }
+                      }}
+                    />
+                    <Button
+                      variant="subtle"
+                      size="sm"
+                      type="submit"
+                      disabled={!renameSpaceDraft.trim()}
+                    >
+                      Save
+                    </Button>
+                    <Button
+                      variant="subtle"
+                      size="sm"
+                      type="button"
+                      onClick={() => setRenamingSpace(false)}
+                    >
+                      Cancel
+                    </Button>
+                  </StyledInlineForm>
+                ) : (
+                  <Button
+                    variant="subtle"
+                    size="sm"
+                    type="button"
+                    onClick={() => {
+                      setRenameSpaceDraft(activeSpace.name)
+                      setRenamingSpace(true)
+                    }}
+                  >
+                    Rename space
+                  </Button>
+                )}
+              </StyledSpaceRenameSection>
               <StyledSpaceMenuPath title={storePath}>
                 {storePath}
               </StyledSpaceMenuPath>
             </StyledSpaceMenuPanel>
           )}
         </StyledSpaceMenuWrap>
+        <StyledNavButton
+          type="button"
+          aria-label="Previous page"
+          title="Previous page"
+          disabled={!canGoBack}
+          onClick={() => navigateHistory(-1)}
+        >
+          <PlatformIcon icon={ArrowLeft} size={14} strokeWidth={1.8} />
+        </StyledNavButton>
+        <StyledNavButton
+          type="button"
+          aria-label="Next page"
+          title="Next page"
+          disabled={!canGoForward}
+          onClick={() => navigateHistory(1)}
+        >
+          <PlatformIcon icon={ArrowRight} size={14} strokeWidth={1.8} />
+        </StyledNavButton>
+        <StyledNavButton
+          type="button"
+          aria-label="Quick page switcher (⌘K)"
+          title="Jump to page (⌘K)"
+          onClick={() => setQuickSwitcherOpen(true)}
+        >
+          <PlatformIcon icon={Search} size={14} strokeWidth={1.8} />
+        </StyledNavButton>
         <StyledHeaderSpacer />
         {externalNotice ? (
           <StyledExternalNotice
@@ -2509,23 +3176,37 @@ export function KnowledgeWorkspace({
         ) : null}
         <StyledSavedDot
           $saving={saving}
-          $error={Boolean(error)}
+          $error={Boolean(displayError)}
           aria-live="polite"
-          title={error?.message}
+          title={displayError?.message}
         >
-          {saving ? 'Saving…' : error ? (saveFailed ? 'Save failed' : 'Needs attention') : 'Saved'}
+          {saving ? 'Saving…' : displayError ? (saveFailed ? 'Save failed' : 'Needs attention') : 'Saved'}
         </StyledSavedDot>
         {store.organisationId&&<StyledSubtle>Private organisation library</StyledSubtle>}
         {saveFailed && !saving ? (
           <Button
             variant="subtle"
             size="sm"
-            title={error?.message}
+            title={displayError?.message}
             onClick={() => void saveStore(current => current).catch(() => undefined)}
           >
             Retry save
           </Button>
         ) : null}
+        <StyledReviewBadge
+          type="button"
+          $active={activeView === 'health'}
+          aria-label="Wiki health"
+          onClick={() =>
+            setActiveView(current => (current === 'health' ? 'wiki' : 'health'))
+          }
+        >
+          <PlatformIcon icon={Activity} size={14} strokeWidth={1.8} />
+          Health
+          {healthFindings.length > 0 && (
+            <StyledReviewBadgeCount>{healthFindings.length}</StyledReviewBadgeCount>
+          )}
+        </StyledReviewBadge>
         {(spaceAgentChanges.length > 0 ||
           activeView === 'agent-review') && (
           <StyledReviewBadge
@@ -2555,6 +3236,33 @@ export function KnowledgeWorkspace({
             onClear={() => setQuery('')}
           />
           <GuidanceStatusFilter value={statusFilter} onChange={setStatusFilter} />
+          {allSpaceTags.length > 0 ? (
+            <StyledTagFilterRow aria-label="Filter by tag">
+              {(() => {
+                const topTags = allSpaceTags.slice(0, 12)
+                const shownTags =
+                  tagFilter && !topTags.includes(tagFilter)
+                    ? [...topTags, tagFilter]
+                    : topTags
+                return shownTags.map(tag => (
+                  <StyledTagChipButton
+                    key={tag}
+                    type="button"
+                    $active={tagFilter === tag}
+                    aria-pressed={tagFilter === tag}
+                    onClick={() =>
+                      setTagFilter(current => (current === tag ? null : tag))
+                    }
+                  >
+                    #{tag}
+                    {tagFilter === tag ? (
+                      <PlatformIcon icon={X} size={10} strokeWidth={2} />
+                    ) : null}
+                  </StyledTagChipButton>
+                ))
+              })()}
+            </StyledTagFilterRow>
+          ) : null}
           {asked ? <MeaningSearchLine state={meaning.state} onSetUp={meaning.setUp} onRetry={meaning.retry} /> : null}
         </StyledSearch>
         <StyledPageList>
@@ -2592,6 +3300,15 @@ export function KnowledgeWorkspace({
             >
               + add directory
             </StyledExplorerButton>
+            <StyledExplorerButton
+              type="button"
+              onClick={() => {
+                setNewRootComposer('note')
+                setNewRootTitle('')
+              }}
+            >
+              + add note
+            </StyledExplorerButton>
           </StyledExplorerActions>
           {newRootComposer ? (
             <StyledSmallComposer onSubmit={addRootPage}>
@@ -2599,7 +3316,11 @@ export function KnowledgeWorkspace({
                 autoFocus
                 value={newRootTitle}
                 placeholder={
-                  newRootComposer === 'directory' ? 'New directory' : 'New page'
+                  newRootComposer === 'directory'
+                    ? 'New directory'
+                    : newRootComposer === 'note'
+                      ? 'New note'
+                      : 'New page'
                 }
                 onChange={event => setNewRootTitle(event.target.value)}
                 onKeyDown={event => {
@@ -2619,7 +3340,7 @@ export function KnowledgeWorkspace({
               </Button>
             </StyledSmallComposer>
           ) : null}
-          {query.trim() || statusFilter !== 'all' ? visiblePages.length ? visiblePages.map(result => (
+          {query.trim() || statusFilter !== 'all' || tagFilter !== null ? visiblePages.length ? visiblePages.map(result => (
             <StyledTreeItem key={result.id}>
               <StyledSearchResult type="button" {...agentRefs(result)} aria-current={activePage?.id === result.id ? 'page' : undefined} onClick={() => selectPage(result.id)}>
                 <span>{result.title}</span>
@@ -2631,7 +3352,7 @@ export function KnowledgeWorkspace({
                 ) : null}
               </StyledSearchResult>
             </StyledTreeItem>
-          )) : <StyledSubtle role="status">No pages match{query.trim() ? ` “${query.trim()}”` : ''} ({guidanceFilterLabel(statusFilter)}).</StyledSubtle> : <>
+          )) : <StyledSubtle role="status">No pages match{query.trim() ? ` “${query.trim()}”` : ''}{tagFilter ? ` #${tagFilter}` : ''} ({guidanceFilterLabel(statusFilter)}).</StyledSubtle> : <>
           {(() => {
             const rootPage = activeSpace.rootPageId
               ? store.pages.find(
@@ -2648,6 +3369,7 @@ export function KnowledgeWorkspace({
                   </StyledPageIcon>
                   <StyledPageSelect
                     type="button"
+                    aria-current={rootPage.id === activePage?.id ? 'page' : undefined}
                     onClick={() => selectPage(rootPage.id)}
                   >
                     <StyledPageTitle>{activeSpace.name}</StyledPageTitle>
@@ -2673,6 +3395,7 @@ export function KnowledgeWorkspace({
                     {hasChildren ? (
                       <StyledTreeAction
                         type="button"
+                        aria-expanded={expanded}
                         aria-label={
                           expanded
                             ? `Collapse ${page.title}`
@@ -2699,6 +3422,7 @@ export function KnowledgeWorkspace({
                     </StyledTreeObjectIcon>
                     <StyledPageSelect
                       type="button"
+                      aria-current={page.id === activePage?.id ? 'page' : undefined}
                       onClick={() => selectPage(page.id)}
                       onDoubleClick={toggleDirectory}
                     >
@@ -2773,8 +3497,8 @@ export function KnowledgeWorkspace({
               message="Use + add page to start this space — new pages file under its _index root."
             />
           ) : null}
-          {notePages.length ? (
-            <StyledNotesSection>
+          <StyledNotesSection>
+            <StyledTreeHeading>
               <StyledNotesHeading
                 type="button"
                 aria-expanded={notesExpanded || Boolean(query.trim())}
@@ -2786,7 +3510,19 @@ export function KnowledgeWorkspace({
                 Notes
                 <StyledPageMeta>{notePages.length}</StyledPageMeta>
               </StyledNotesHeading>
-              {notesExpanded || query.trim()
+              <StyledExplorerButton
+                type="button"
+                aria-label="New note"
+                onClick={() => {
+                  setNewRootComposer('note')
+                  setNewRootTitle('')
+                }}
+              >
+                + New note
+              </StyledExplorerButton>
+            </StyledTreeHeading>
+            {notesExpanded || query.trim()
+              ? notePages.length
                 ? notePages.map(note => (
                     <StyledTreeItem key={note.id}>
                       <StyledPageRow
@@ -2800,17 +3536,38 @@ export function KnowledgeWorkspace({
                         </StyledPageIcon>
                         <StyledPageSelect
                           type="button"
+                          aria-current={note.id === activePage?.id ? 'page' : undefined}
                           onClick={() => selectPage(note.id)}
                         >
                           <StyledPageTitle>{note.title}</StyledPageTitle>
                         </StyledPageSelect>
                         <StyledPageMeta className="tree-count" />
+                        <StyledTreeTools>
+                          <MenuButtonDropdown
+                            label={`Note actions for ${note.title}`}
+                            icon={MoreHorizontal}
+                            items={[
+                              { id: 'promote', label: 'Promote to wiki', icon: <AddPageIcon /> },
+                              { id: 'edit', label: 'Edit note', icon: <EditIcon /> },
+                              { id: 'delete', label: 'Delete note', icon: <TrashIcon />, tone: 'danger' as const },
+                            ]}
+                            onSelectItem={({ id }) => {
+                              if (id === 'promote') promoteTreeNote(note)
+                              else if (id === 'edit') editTreePage(note.id)
+                              else if (id === 'delete') deleteTreePage(note)
+                            }}
+                          />
+                        </StyledTreeTools>
                       </StyledPageRow>
                     </StyledTreeItem>
                   ))
-                : null}
-            </StyledNotesSection>
-          ) : null}
+                : (
+                  <StyledSubtle style={{ padding: '4px 16px' }}>
+                    No notes yet.
+                  </StyledSubtle>
+                )
+              : null}
+          </StyledNotesSection>
           </>}
         </StyledPageList>
       </StyledSidebar>
@@ -2818,6 +3575,7 @@ export function KnowledgeWorkspace({
         <CompactPageList
           store={store}
           query={query}
+          meaningHits={meaningHits}
           onQueryChange={setQuery}
           onOpenPage={selectPage}
           onCreatePage={createCompactPage}
@@ -2833,10 +3591,22 @@ export function KnowledgeWorkspace({
         onSelectPage={selectPage}
         onSave={mutate}
         onSaveGuidance={saveStore}
+        onDeletePage={deleteTreePage}
+        onSelectTag={tag => {
+          setActiveView('wiki')
+          setTagFilter(current => (current === tag ? null : tag))
+        }}
         editRequest={editRequest}
+        editToggleNonce={editToggleNonce}
         compact={compact
-          ? { onBack: () => setCompactPageOpen(false), status: saving ? 'Saving…' : error ? '' : 'Saved' }
+          ? { onBack: () => setCompactPageOpen(false), status: saving ? 'Saving…' : displayError ? '' : 'Saved' }
           : undefined}
+      />
+      <QuickPageSwitcher
+        open={quickSwitcherOpen}
+        store={store}
+        onSelectPage={selectPage}
+        onClose={() => setQuickSwitcherOpen(false)}
       />
       {deleteCandidate ? (
         <>
@@ -2844,13 +3614,17 @@ export function KnowledgeWorkspace({
           <Modal
             open
             onClose={() => setDeleteCandidate(null)}
-            title="Delete page?"
+            title={deleteCandidate.kind === 'note' ? 'Delete note?' : 'Delete page?'}
             size="xs"
             bodyClassName="knowledge-delete-body"
             initialFocusRef={cancelDeleteRef}
           >
             <p>
-              Delete <strong>“{deleteCandidate.title}”</strong> and its child pages?
+              {deleteCandidate.kind === 'note' ? (
+                <>Delete note <strong>“{deleteCandidate.title}”</strong>?</>
+              ) : (
+                <>Delete <strong>“{deleteCandidate.title}”</strong> and its child pages?</>
+              )}
             </p>
             <p>This cannot be undone.</p>
             <StyledChipRow style={{ justifyContent: 'flex-end', marginTop: 16 }}>
@@ -2862,6 +3636,28 @@ export function KnowledgeWorkspace({
               </Button>
             </StyledChipRow>
           </Modal>
+        </>
+      ) : null}
+      {activeView === 'health' ? (
+        <>
+          <StyledReviewOverlayBackdrop
+            onClick={() => setActiveView('wiki')}
+          />
+          <StyledReviewOverlay
+            role="dialog"
+            aria-label="Wiki health"
+          >
+            <WikiHealthPanel
+              activeSpace={activeSpace}
+              findings={healthFindings}
+              onJumpToPage={pageId => {
+                setActiveView('wiki')
+                selectPage(pageId)
+              }}
+              onCreateMissingPage={createPageFromHealth}
+              onClose={() => setActiveView('wiki')}
+            />
+          </StyledReviewOverlay>
         </>
       ) : null}
       {activeView === 'agent-review' ? (
@@ -2885,12 +3681,45 @@ export function KnowledgeWorkspace({
               onApproveAll={approveAllAgentChanges}
               onEdit={editAgentChange}
               onReject={rejectAgentChange}
+              onRevert={revertAgentChange}
+              onClose={() => setActiveView('wiki')}
             />
           </StyledReviewOverlay>
         </>
       ) : null}
     </StyledWorkspace>
   )
+}
+
+function canRevertAgentChange(
+  change: KnowledgeAgentChange,
+  store: KnowledgeStore,
+): boolean {
+  if (change.status !== 'applied' || !change.pageId) return false
+  const page = store.pages.find(candidate => candidate.id === change.pageId)
+  if (!page) return false
+  if (change.changeType === 'page.create') {
+    return !store.spaces.some(space => space.rootPageId === page.id)
+  }
+  if (change.changeType === 'page.promote') return page.kind === 'wiki'
+  if (change.changeType === 'page.update') {
+    if (change.before === undefined) return false
+    const isGuidanceOnly =
+      change.patch.body === undefined &&
+      (change.patch.guidanceStatus !== undefined ||
+        change.patch.lastChecked !== undefined ||
+        change.patch.replacementPageId !== undefined)
+    if (isGuidanceOnly) {
+      try {
+        const parsed: unknown = JSON.parse(change.before)
+        return Boolean(parsed && typeof parsed === 'object')
+      } catch {
+        return false
+      }
+    }
+    return true
+  }
+  return false
 }
 
 function KnowledgeAgentReview({
@@ -2905,6 +3734,8 @@ function KnowledgeAgentReview({
   onApproveAll,
   onEdit,
   onReject,
+  onRevert,
+  onClose,
 }: {
   store: KnowledgeStore
   activeSpace: KnowledgeSpace
@@ -2917,7 +3748,20 @@ function KnowledgeAgentReview({
   onApproveAll: () => void
   onEdit: (change: KnowledgeAgentChange) => void
   onReject: (changeId: string) => void
+  onRevert: (change: KnowledgeAgentChange) => void
+  onClose: () => void
 }): React.ReactElement {
+  const [expandedDiffIds, setExpandedDiffIds] = useState<Set<string>>(
+    () => new Set(),
+  )
+  const toggleDiff = (changeId: string): void => {
+    setExpandedDiffIds(current => {
+      const next = new Set(current)
+      if (next.has(changeId)) next.delete(changeId)
+      else next.add(changeId)
+      return next
+    })
+  }
   const sortedChanges = [...changes].sort((a, b) => {
     if (sort === 'agent') {
       return (
@@ -2931,14 +3775,21 @@ function KnowledgeAgentReview({
   return (
     <StyledReviewPane>
       <StyledReviewHeader>
-        <Heading level={1}>Agent log</Heading>
-        <StyledSubtle>
-          {pendingChanges.length
-            ? `${pendingChanges.length} proposed edits waiting for ${activeSpace.name}`
-            : changes.length
-              ? `${changes.length} agent changes recorded for ${activeSpace.name}`
-              : `No agent changes recorded for ${activeSpace.name}`}
-        </StyledSubtle>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+          <div>
+            <Heading level={1}>Agent log</Heading>
+            <StyledSubtle>
+              {pendingChanges.length
+                ? `${pendingChanges.length} proposed edits waiting for ${activeSpace.name}`
+                : changes.length
+                  ? `${changes.length} agent changes recorded for ${activeSpace.name}`
+                  : `No agent changes recorded for ${activeSpace.name}`}
+            </StyledSubtle>
+          </div>
+          <Button variant="subtle" size="sm" onClick={onClose}>
+            Close
+          </Button>
+        </div>
         <StyledReviewToolbar>
           <SegmentedControl
             aria-label="Sort agent proposals"
@@ -2976,61 +3827,110 @@ function KnowledgeAgentReview({
               const page = change.pageId
                 ? store.pages.find(candidate => candidate.id === change.pageId)
                 : null
+              const hasDiff =
+                change.before !== undefined ||
+                change.after !== undefined ||
+                change.patch.body !== undefined
+              const diffOpen = expandedDiffIds.has(change.id)
+              const revertable = canRevertAgentChange(change, store)
               return (
-                <StyledReviewRow key={change.id}>
-                  <StyledProposalTitle>
-                    <strong>{change.agentName}</strong>
-                    <StyledSubtle>
-                      {change.sourceAppSlug
-                        ? `${change.sourceAppSlug} agent`
-                        : 'Knowledge agent'}
-                    </StyledSubtle>
-                  </StyledProposalTitle>
-                  <span>
-                    <Badge tone="neutral">{change.severity}</Badge>
-                  </span>
-                  <span>{formatDate(change.proposedAt)}</span>
-                  <StyledProposalTitle>
-                    <strong>{change.title}</strong>
-                    <StyledSubtle>
-                      {change.changeType.replace('page.', '')}
-                      {page ? ` · ${page.title}` : ''}
-                      {` · ${change.summary}`}
-                    </StyledSubtle>
-                  </StyledProposalTitle>
-                  {change.status === 'pending' ? (
-                    <StyledReviewActions>
-                      <Button
-                        variant="subtle"
-                        size="sm"
-                        disabled={!change.pageId}
-                        onClick={() => onEdit(change)}
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        variant="subtle"
-                        size="sm"
-                        disabled={saving}
-                        onClick={() => onApprove(change.id)}
-                      >
-                        Accept
-                      </Button>
-                      <Button
-                        variant="danger" data-pureknowledge-danger
-                        size="sm"
-                        disabled={saving}
-                        onClick={() => onReject(change.id)}
-                      >
-                        Reject
-                      </Button>
-                    </StyledReviewActions>
-                  ) : (
-                    <StyledReviewActions>
-                      <Badge tone="neutral">{change.status}</Badge>
-                    </StyledReviewActions>
-                  )}
-                </StyledReviewRow>
+                <div key={change.id}>
+                  <StyledReviewRow>
+                    <StyledProposalTitle>
+                      <strong>{change.agentName}</strong>
+                      <StyledSubtle>
+                        {change.sourceAppSlug
+                          ? `${change.sourceAppSlug} agent`
+                          : 'Knowledge agent'}
+                      </StyledSubtle>
+                    </StyledProposalTitle>
+                    <span>
+                      <Badge tone="neutral">{change.severity}</Badge>
+                    </span>
+                    <span>{formatDate(change.proposedAt)}</span>
+                    <StyledProposalTitle>
+                      <strong>{change.title}</strong>
+                      <StyledSubtle>
+                        {change.changeType.replace('page.', '')}
+                        {page ? ` · ${page.title}` : ''}
+                        {` · ${change.summary}`}
+                      </StyledSubtle>
+                      {hasDiff ? (
+                        <Button
+                          variant="subtle"
+                          size="sm"
+                          style={{ marginTop: 4 }}
+                          aria-expanded={diffOpen}
+                          onClick={() => toggleDiff(change.id)}
+                        >
+                          {diffOpen ? 'Hide diff' : 'Show diff'}
+                        </Button>
+                      ) : null}
+                    </StyledProposalTitle>
+                    {change.status === 'pending' ? (
+                      <StyledReviewActions>
+                        <Button
+                          variant="subtle"
+                          size="sm"
+                          disabled={!change.pageId}
+                          onClick={() => onEdit(change)}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          variant="subtle"
+                          size="sm"
+                          disabled={saving}
+                          onClick={() => onApprove(change.id)}
+                        >
+                          Accept
+                        </Button>
+                        <Button
+                          variant="danger" data-pureknowledge-danger
+                          size="sm"
+                          disabled={saving}
+                          onClick={() => onReject(change.id)}
+                        >
+                          Reject
+                        </Button>
+                      </StyledReviewActions>
+                    ) : (
+                      <StyledReviewActions>
+                        <Badge tone="neutral">{change.status}</Badge>
+                        {revertable ? (
+                          <Button
+                            variant="subtle"
+                            size="sm"
+                            disabled={saving}
+                            title="Revert this applied change"
+                            onClick={() => onRevert(change)}
+                          >
+                            <PlatformIcon icon={RotateCcw} size={13} strokeWidth={1.8} />
+                            Revert
+                          </Button>
+                        ) : null}
+                      </StyledReviewActions>
+                    )}
+                  </StyledReviewRow>
+                  {hasDiff && diffOpen ? (
+                    <StyledReviewDiffWrap aria-label={`Diff for ${change.title}`}>
+                      <StyledDiffGrid>
+                        {change.before !== undefined ? (
+                          <StyledDiffBlock $tone="before">
+                            <header>Before</header>
+                            <pre>{change.before || '(empty)'}</pre>
+                          </StyledDiffBlock>
+                        ) : null}
+                        {(change.after !== undefined || change.patch.body !== undefined) ? (
+                          <StyledDiffBlock $tone="after">
+                            <header>After</header>
+                            <pre>{change.after ?? change.patch.body ?? '(empty)'}</pre>
+                          </StyledDiffBlock>
+                        ) : null}
+                      </StyledDiffGrid>
+                    </StyledReviewDiffWrap>
+                  ) : null}
+                </div>
               )
             })}
           </StyledReviewTable>
@@ -3045,25 +3945,45 @@ function KnowledgeAgentReview({
   )
 }
 
+function afterSave(
+  result: void | Promise<boolean | void>,
+  onSuccess: () => void,
+): void {
+  if (result && typeof (result as Promise<boolean | void>).then === 'function') {
+    void (result as Promise<boolean | void>).then(
+      ok => {
+        if (ok !== false) onSuccess()
+      },
+      () => undefined,
+    )
+  } else {
+    onSuccess()
+  }
+}
+
 /** Only what the person changed in this editor: a field left alone must not write back the version it opened with. */
 function ownDraftChanges(
-  base: { title: string; body: string; tags: string },
-  draft: { titleDraft: string; bodyDraft: string; tagsDraft: string },
-): { title?: string; body?: string; tags?: string[] } {
+  base: { title: string; body: string; tags: string; aliases: string },
+  draft: { titleDraft: string; bodyDraft: string; tagsDraft: string; aliasesDraft: string },
+): { title?: string; body?: string; tags?: string[]; aliases?: string[] } {
   return {
     ...(draft.titleDraft !== base.title ? { title: draft.titleDraft } : {}),
     ...(draft.bodyDraft !== base.body ? { body: normalizeWikiLinkEscapes(draft.bodyDraft) } : {}),
     ...(draft.tagsDraft !== base.tags
       ? { tags: draft.tagsDraft.split(',').map(tag => tag.trim()).filter(Boolean) }
       : {}),
+    ...(draft.aliasesDraft !== base.aliases
+      ? { aliases: draft.aliasesDraft.split(',').map(alias => alias.trim()).filter(Boolean) }
+      : {}),
   }
 }
 
 function recordKnowledgeEditSession(
-  baseline: { title: string; body: string; tags: string } | null,
+  baseline: { title: string; body: string; tags: string; aliases: string } | null,
   titleDraft: string,
   bodyDraft: string,
   tagsDraft: string,
+  aliasesDraft = '',
 ): void {
   if (!baseline) return
   const nextTitle = titleDraft.trim() || baseline.title
@@ -3073,7 +3993,11 @@ function recordKnowledgeEditSession(
       `Renamed page "${baseline.title}" to "${nextTitle}"`,
     )
   }
-  if (bodyDraft !== baseline.body || tagsDraft !== baseline.tags) {
+  if (
+    bodyDraft !== baseline.body ||
+    tagsDraft !== baseline.tags ||
+    aliasesDraft !== baseline.aliases
+  ) {
     recordUserOperation('page.update', `Edited page "${nextTitle}"`)
   }
 }
@@ -3085,18 +4009,37 @@ interface KnowledgePageEditorProps {
   page: KnowledgePage | null
   saving: boolean
   onSelectPage: (pageId: string) => void
-  onSave: (update: KnowledgeStoreUpdate) => void
+  onSave: (update: KnowledgeStoreUpdate) => void | Promise<boolean | void>
   onSaveGuidance?: (update: KnowledgeStoreUpdate) => void | Promise<void>
+  onDeletePage?: (page: KnowledgePage) => void
+  onSelectTag?: (tag: string) => void
   editRequest: { pageId: string; nonce: number } | null
+  editToggleNonce?: number
   /** Held inside a page: the way back to the list, and how saving stands. */
   compact?: { onBack: () => void; status: string }
 }
 
 /** No page is its own view: the open page can go at any moment, when another window deletes it. */
 export function KnowledgePageEditor(props: KnowledgePageEditorProps): React.ReactElement {
+  const [keptNote, setKeptNote] = useState('')
+  const nextKeptNoteRef = useRef('')
+
+  useEffect(() => {
+    if (!props.page && nextKeptNoteRef.current) {
+      setKeptNote(nextKeptNoteRef.current)
+      nextKeptNoteRef.current = ''
+    }
+  }, [props.page])
+
   if (!props.page) {
+    const notice = keptNote || nextKeptNoteRef.current
     return (
       <StyledEditorPane {...(props.compact ? { 'data-compact-part': 'page' } : undefined)}>
+        {notice ? (
+          <p role="status" style={{ padding: '12px 24px 0', margin: 0 }}>
+            {notice}
+          </p>
+        ) : null}
         <EmptyState
           title="Select a page"
           message="Choose a wiki page or note, or create one where it belongs."
@@ -3104,7 +4047,15 @@ export function KnowledgePageEditor(props: KnowledgePageEditorProps): React.Reac
       </StyledEditorPane>
     )
   }
-  return <OpenPageEditor {...props} page={props.page} />
+  return (
+    <OpenPageEditor
+      {...props}
+      page={props.page}
+      keptNote={keptNote}
+      setKeptNote={setKeptNote}
+      nextKeptNoteRef={nextKeptNoteRef}
+    />
+  )
 }
 
 function OpenPageEditor({
@@ -3115,19 +4066,38 @@ function OpenPageEditor({
   saving,
   onSelectPage,
   onSave,
-  onSaveGuidance = onSave,
+  onSaveGuidance = (update: KnowledgeStoreUpdate) =>
+    Promise.resolve(onSave(update)).then(() => undefined),
+  onDeletePage,
+  onSelectTag,
   editRequest,
+  editToggleNonce = 0,
   compact,
-}: KnowledgePageEditorProps & { page: KnowledgePage }): React.ReactElement {
+  keptNote,
+  setKeptNote,
+  nextKeptNoteRef,
+}: KnowledgePageEditorProps & {
+  page: KnowledgePage
+  keptNote: string
+  setKeptNote: (note: string) => void
+  nextKeptNoteRef: React.MutableRefObject<string>
+}): React.ReactElement {
   const compactHide = compact ? { 'data-compact-hide': '' } : undefined
   const compactPart = (part: string) => (compact ? { 'data-compact-part': part } : undefined)
   const [titleDraft, setTitleDraft] = useState('')
   const [bodyDraft, setBodyDraft] = useState('')
   const [tagsDraft, setTagsDraft] = useState('')
+  const [aliasesDraft, setAliasesDraft] = useState('')
   const [linkTitle, setLinkTitle] = useState('')
   const [linkPath, setLinkPath] = useState('')
   const [childTitle, setChildTitle] = useState('')
   const [editing, setEditing] = useState(false)
+  const [copiedWikiLink, setCopiedWikiLink] = useState(false)
+  const [renameBacklinkOffer, setRenameBacklinkOffer] = useState<{
+    oldTitle: string
+    newTitle: string
+    count: number
+  } | null>(null)
   const [galleryError, setGalleryError] = useState('')
   const [galleryRemoveCandidate, setGalleryRemoveCandidate] = useState<{
     galleryIndex: number
@@ -3144,16 +4114,16 @@ function OpenPageEditor({
   const galleryImportIndexRef = useRef<number | null>(null)
   const galleryRemoveCancelRef = useRef<HTMLButtonElement>(null)
   const dropSurface = useRef<HTMLDivElement>(null)
+  // If this frame cannot show the shell's file URLs, go back to inlining.
+  const urlImagesUnavailable = useRef(false)
   // What the drafts started from. Only what differs from it is the person's own: a stale draft is not an edit.
-  const draftBase = useRef({ title: '', body: '', tags: '' })
+  const draftBase = useRef({ title: '', body: '', tags: '', aliases: '' })
   // Bodies this editor sent to the store: their return is not news from elsewhere.
   const sentBodies = useRef(new Set<string>())
   const noteSent = (body: string): void => {
     sentBodies.current.add(body)
     if (sentBodies.current.size > 40) sentBodies.current.delete(sentBodies.current.values().next().value as string)
   }
-  const [keptNote, setKeptNote] = useState('')
-  const nextKeptNote = useRef('')
   // Bumped when words from elsewhere replace an untouched draft: the open editor starts again from them.
   const [editorVersion, setEditorVersion] = useState(0)
   const [preparedBody, setPreparedBody] = useState<{
@@ -3180,6 +4150,9 @@ function OpenPageEditor({
     return url
   }, [packagePath])
   useEffect(() => {
+    urlImagesUnavailable.current = false
+  }, [packagePath, page?.id])
+  useEffect(() => {
     // While editing, the editor holds the page: re-preparing on every
     // keystroke only handed the same document back to it and had it rebuilt.
     if (editing && preparedBody.version === editorVersion) return
@@ -3193,8 +4166,6 @@ function OpenPageEditor({
     return () => { live = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bodyDraft, editing, editorVersion, fileUrlFor, packagePath, page?.id])
-  // If this frame cannot show the shell's file URLs, go back to inlining.
-  const urlImagesUnavailable = useRef(false)
   useEffect(() => {
     if (editing || urlImagesUnavailable.current || !editorHtml.includes('src="purescience-fs://')) return
     const first = /src="(purescience-fs:\/\/[^"]+)"/.exec(editorHtml)?.[1]
@@ -3226,17 +4197,20 @@ function OpenPageEditor({
         if (reference) editor.commands.insertContentAt(editor.state.doc.content.size, reference)
         body = knowledgeHtmlToMarkdown(editor.getHTML(), packagePath)
       } else body = [bodyDraft, knowledgeHtmlToMarkdown(drop.html, packagePath), toMd(reference)].filter(Boolean).join('\n\n')
+      body = normalizeWikiLinkEscapes(body)
       const pageId = page.id
       if (latestDraftRef.current.page?.id === pageId) setBodyDraft(body)
       noteSent(body)
-      onSave(current => {
-        let next = updateKnowledgePage(current, pageId, { body }, { actor: HUMAN_ACTIVITY_ACTOR })
-        const currentPage = current.pages.find(candidate => candidate.id === pageId)
-        const currentDuplicate = currentPage?.links.some(link => drop.link.path ? link.path === drop.link.path : drop.link.url ? link.url === drop.link.url : link.title === drop.link.title)
-        if (!currentDuplicate) next = addKnowledgeLink(next, pageId, drop.link, { actor: HUMAN_ACTIVITY_ACTOR })
-        return next
-      })
-      recordUserOperation('page.update', 'Added shared content to knowledge page')
+      afterSave(
+        onSave(current => {
+          let next = updateKnowledgePage(current, pageId, { body }, { actor: HUMAN_ACTIVITY_ACTOR })
+          const currentPage = current.pages.find(candidate => candidate.id === pageId)
+          const currentDuplicate = currentPage?.links.some(link => drop.link.path ? link.path === drop.link.path : drop.link.url ? link.url === drop.link.url : link.title === drop.link.title)
+          if (!currentDuplicate) next = addKnowledgeLink(next, pageId, drop.link, { actor: HUMAN_ACTIVITY_ACTOR })
+          return next
+        }),
+        () => recordUserOperation('page.update', 'Added shared content to knowledge page'),
+      )
     },
   })
   const [activityOpen, setActivityOpen] = useState(false)
@@ -3253,25 +4227,48 @@ function OpenPageEditor({
         setActivityOpen(false)
       }
     }
+    const onKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.defaultPrevented || hasOpenModal()) return
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setActivityOpen(false)
+      }
+    }
     document.addEventListener('mousedown', onPointerDown)
-    return () => document.removeEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
   }, [activityOpen])
+
+  const pageTagsText = page?.tags.join(', ') ?? ''
+  const pageAliasesText = (page?.aliases ?? []).join(', ')
 
   useEffect(() => {
     setTitleDraft(page?.title ?? '')
     setBodyDraft(page?.body ?? '')
     setTagsDraft(page?.tags.join(', ') ?? '')
-    draftBase.current = { title: page?.title ?? '', body: page?.body ?? '', tags: page?.tags.join(', ') ?? '' }
+    setAliasesDraft((page?.aliases ?? []).join(', '))
+    draftBase.current = {
+      title: page?.title ?? '',
+      body: page?.body ?? '',
+      tags: page?.tags.join(', ') ?? '',
+      aliases: (page?.aliases ?? []).join(', '),
+    }
     sentBodies.current.clear()
-    setKeptNote(nextKeptNote.current)
-    nextKeptNote.current = ''
+    setKeptNote(nextKeptNoteRef.current)
+    nextKeptNoteRef.current = ''
     setLinkTitle('')
     setLinkPath('')
     setChildTitle('')
     setEditing(false)
+    setCopiedWikiLink(false)
+    setRenameBacklinkOffer(null)
     setExpandedImage(null)
     setGalleryError('')
     setGalleryRemoveCandidate(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page?.id])
 
   useEffect(() => {
@@ -3279,13 +4276,18 @@ function OpenPageEditor({
     setTitleDraft(page?.title ?? '')
     setBodyDraft(page?.body ?? '')
     setTagsDraft(page?.tags.join(', ') ?? '')
-    draftBase.current = { title: page?.title ?? '', body: page?.body ?? '', tags: page?.tags.join(', ') ?? '' }
-  }, [editing, page?.body, page?.tags, page?.title])
+    setAliasesDraft((page?.aliases ?? []).join(', '))
+    draftBase.current = {
+      title: page?.title ?? '',
+      body: page?.body ?? '',
+      tags: page?.tags.join(', ') ?? '',
+      aliases: (page?.aliases ?? []).join(', '),
+    }
+  }, [editing, page?.aliases, page?.body, page?.tags, page?.title])
 
   // While editing, the page can change under the drafts: another window, an agent, this app's other copy. What was not
   // touched here takes the new version. Words typed here stay and go on being saved, and the other version is kept as a
   // page of its own, so neither is lost and the person is told.
-  const pageTagsText = page?.tags.join(', ') ?? ''
   useEffect(() => {
     if (!editing || !page) return
     const base = draftBase.current
@@ -3296,6 +4298,10 @@ function OpenPageEditor({
     if (pageTagsText !== base.tags) {
       if (tagsDraft === base.tags) setTagsDraft(pageTagsText)
       base.tags = pageTagsText
+    }
+    if (pageAliasesText !== base.aliases) {
+      if (aliasesDraft === base.aliases) setAliasesDraft(pageAliasesText)
+      base.aliases = pageAliasesText
     }
     if (page.body === base.body) return
     const elsewhere = !sentBodies.current.has(page.body) && page.body !== bodyDraft
@@ -3309,10 +4315,10 @@ function OpenPageEditor({
     }
     const theirs = page
     const at = new Date().toISOString()
-    onSave(current => keepKnowledgeVersion(current, theirs, at))
+    void onSave(current => keepKnowledgeVersion(current, theirs, at))
     setKeptNote(`This page changed in another window while you were writing. Your words stay here, and the other version is kept as “${keptPageTitle(theirs.title, at)}”.`)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editing, page?.id, page?.body, page?.title, pageTagsText])
+  }, [editing, page?.id, page?.body, page?.title, pageTagsText, pageAliasesText])
 
   const handledEditRequestNonce = useRef<number | null>(null)
   useEffect(() => {
@@ -3345,11 +4351,63 @@ function OpenPageEditor({
     titleDraft: string
     bodyDraft: string
     tagsDraft: string
+    aliasesDraft: string
     editing: boolean
-  }>({ page: null, titleDraft: '', bodyDraft: '', tagsDraft: '', editing: false })
+  }>({ page: null, titleDraft: '', bodyDraft: '', tagsDraft: '', aliasesDraft: '', editing: false })
   useLayoutEffect(() => {
-    latestDraftRef.current = { page, titleDraft, bodyDraft, tagsDraft, editing }
+    latestDraftRef.current = { page, titleDraft, bodyDraft, tagsDraft, aliasesDraft, editing }
   })
+
+  const flushPendingDrafts = useCallback((): void => {
+    const latest = latestDraftRef.current
+    if (!latest.editing || !latest.page) return
+    const patch = ownDraftChanges(draftBase.current, latest)
+    if (!Object.keys(patch).length) return
+    const editedPage = latest.page
+    const at = new Date().toISOString()
+    if (patch.body !== undefined) noteSent(patch.body)
+    let pageDeletedConcurrently = false
+    const saveResult = onSave(current => {
+      if (current.pages.some(candidate => candidate.id === editedPage.id)) {
+        pageDeletedConcurrently = false
+        return updateKnowledgePage(current, editedPage.id, patch, { actor: HUMAN_ACTIVITY_ACTOR })
+      }
+      pageDeletedConcurrently = true
+      return patch.body?.trim()
+        ? keepKnowledgeVersion(current, { ...editedPage, body: patch.body }, at)
+        : current
+    })
+    afterSave(saveResult, () => {
+      if (pageDeletedConcurrently && patch.body?.trim()) {
+        const note = `“${editedPage.title}” was deleted in another window. The words you were typing are kept as “${keptPageTitle(editedPage.title, at)}”.`
+        nextKeptNoteRef.current = note
+        setKeptNote(note)
+        return
+      }
+      draftBase.current = {
+        title: patch.title ?? draftBase.current.title,
+        body: patch.body ?? draftBase.current.body,
+        tags: patch.tags ? patch.tags.join(', ') : draftBase.current.tags,
+        aliases: patch.aliases ? patch.aliases.join(', ') : draftBase.current.aliases,
+      }
+    })
+  }, [nextKeptNoteRef, onSave, setKeptNote])
+
+  useEffect(() => {
+    const onBeforeUnload = (): void => {
+      flushPendingDrafts()
+    }
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === 'hidden') flushPendingDrafts()
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [flushPendingDrafts])
+
   useLayoutEffect(() => {
     const pageId = page?.id
     return () => {
@@ -3360,34 +4418,42 @@ function OpenPageEditor({
       const editedPage = latest.page
       const at = new Date().toISOString()
       // The page can be gone: deleted in another window while these words were being typed. It stays deleted; they stay too.
-      if (patch.body !== undefined) nextKeptNote.current = `“${editedPage.title}” was deleted in another window. The words you were typing are kept as “${keptPageTitle(editedPage.title, at)}”.`
-      onSave(current => {
-        if (current.pages.some(candidate => candidate.id === editedPage.id)) {
-          nextKeptNote.current = ''
-          return updateKnowledgePage(current, editedPage.id, patch, { actor: HUMAN_ACTIVITY_ACTOR })
-        }
-        return patch.body?.trim()
-          ? keepKnowledgeVersion(current, { ...editedPage, body: patch.body }, at)
-          : current
-      })
-      recordKnowledgeEditSession(
-        editBaselineRef.current,
-        latest.titleDraft,
-        latest.bodyDraft,
-        latest.tagsDraft,
+      if (patch.body !== undefined) {
+        nextKeptNoteRef.current = `“${editedPage.title}” was deleted in another window. The words you were typing are kept as “${keptPageTitle(editedPage.title, at)}”.`
+      }
+      const baselineSnapshot = editBaselineRef.current
+      afterSave(
+        onSave(current => {
+          if (current.pages.some(candidate => candidate.id === editedPage.id)) {
+            nextKeptNoteRef.current = ''
+            return updateKnowledgePage(current, editedPage.id, patch, { actor: HUMAN_ACTIVITY_ACTOR })
+          }
+          return patch.body?.trim()
+            ? keepKnowledgeVersion(current, { ...editedPage, body: patch.body }, at)
+            : current
+        }),
+        () =>
+          recordKnowledgeEditSession(
+            baselineSnapshot,
+            latest.titleDraft,
+            latest.bodyDraft,
+            latest.tagsDraft,
+            latest.aliasesDraft,
+          ),
       )
     }
-  }, [onSave, page?.id])
+  }, [nextKeptNoteRef, onSave, page?.id])
 
   useEffect(() => {
     if (!editing || !page || bodyDraft === page.body || bodyDraft === draftBase.current.body) return
     const pageId = page.id
+    const normalizedBody = normalizeWikiLinkEscapes(bodyDraft)
     const timer = window.setTimeout(() => {
-      noteSent(bodyDraft)
-      onSave(current => updateKnowledgePage(
+      noteSent(normalizedBody)
+      void onSave(current => updateKnowledgePage(
         current,
         pageId,
-        { body: bodyDraft },
+        { body: normalizedBody },
         { actor: HUMAN_ACTIVITY_ACTOR },
       ))
     }, 700)
@@ -3400,6 +4466,7 @@ function OpenPageEditor({
     title: string
     body: string
     tags: string
+    aliases: string
   } | null>(null)
   useEffect(() => {
     if (editing && page) {
@@ -3407,6 +4474,7 @@ function OpenPageEditor({
         title: page.title,
         body: page.body,
         tags: page.tags.join(', '),
+        aliases: (page.aliases ?? []).join(', '),
       }
     }
     if (!editing) editBaselineRef.current = null
@@ -3456,39 +4524,83 @@ function OpenPageEditor({
     [store, page],
   )
 
-  const commitPage = (): void => {
+  const commitPage = useCallback((): void | Promise<boolean | void> => {
     const pageId = page.id
-    const patch = ownDraftChanges(draftBase.current, { titleDraft, bodyDraft, tagsDraft })
-    if (patch.body !== undefined) noteSent(patch.body)
-    onSave(current => updateKnowledgePage(current, pageId, patch, { actor: HUMAN_ACTIVITY_ACTOR }))
-  }
-
-  const finishEditing = (): void => {
-    commitPage()
-    recordKnowledgeEditSession(
-      editBaselineRef.current,
+    const patch = ownDraftChanges(draftBase.current, {
       titleDraft,
       bodyDraft,
       tagsDraft,
+      aliasesDraft,
+    })
+    if (patch.body !== undefined) noteSent(patch.body)
+    return onSave(current =>
+      updateKnowledgePage(current, pageId, patch, { actor: HUMAN_ACTIVITY_ACTOR }),
+    )
+  }, [aliasesDraft, bodyDraft, onSave, page.id, tagsDraft, titleDraft])
+
+  const finishEditing = useCallback((): void => {
+    const baseline = editBaselineRef.current
+    const oldTitle = baseline?.title ?? page.title
+    const nextTitle = titleDraft.trim() || oldTitle
+    if (nextTitle.toLowerCase() !== oldTitle.toLowerCase()) {
+      // Count pages whose body links to the old title directly (resilient even if
+      // title input onBlur already updated page.title in the store).
+      const affectedCount = store.pages.filter(
+        candidate =>
+          candidate.spaceId === page.spaceId &&
+          candidate.id !== page.id &&
+          rewriteWikiLinksForRename(candidate.body, oldTitle, nextTitle) !== candidate.body,
+      ).length
+      if (affectedCount > 0) {
+        setRenameBacklinkOffer({
+          oldTitle,
+          newTitle: nextTitle,
+          count: affectedCount,
+        })
+      }
+    }
+    const result = commitPage()
+    afterSave(result, () =>
+      recordKnowledgeEditSession(
+        baseline,
+        titleDraft,
+        bodyDraft,
+        tagsDraft,
+        aliasesDraft,
+      ),
     )
     setEditing(false)
-  }
+  }, [aliasesDraft, bodyDraft, commitPage, page, store.pages, tagsDraft, titleDraft])
+
+  const handledEditToggleRef = useRef(editToggleNonce)
+  useEffect(() => {
+    if (editToggleNonce === handledEditToggleRef.current) return
+    handledEditToggleRef.current = editToggleNonce
+    if (editing) {
+      finishEditing()
+    } else if (preparedBody.pageId === page.id) {
+      setEditing(true)
+    }
+  }, [editToggleNonce, editing, finishEditing, page.id, preparedBody.pageId])
 
   const promoteNote = (): void => {
-    onSave(current => {
-      const currentPage = current.pages.find(candidate => candidate.id === page.id)
-      if (!currentPage) return current
-      const rootPageId = current.spaces.find(space => space.id === currentPage.spaceId)?.rootPageId ?? null
-      return updateKnowledgePage(
-        current,
-        currentPage.id,
-        { kind: 'wiki', parentId: rootPageId },
-        { actor: HUMAN_ACTIVITY_ACTOR },
-      )
-    })
-    recordUserOperation(
-      'page.promote',
-      `Promoted note "${page.title}" to wiki`,
+    afterSave(
+      onSave(current => {
+        const currentPage = current.pages.find(candidate => candidate.id === page.id)
+        if (!currentPage) return current
+        const rootPageId = current.spaces.find(space => space.id === currentPage.spaceId)?.rootPageId ?? null
+        return updateKnowledgePage(
+          current,
+          currentPage.id,
+          { kind: 'wiki', parentId: rootPageId },
+          { actor: HUMAN_ACTIVITY_ACTOR },
+        )
+      }),
+      () =>
+        recordUserOperation(
+          'page.promote',
+          `Promoted note "${page.title}" to wiki`,
+        ),
     )
   }
 
@@ -3496,43 +4608,133 @@ function OpenPageEditor({
   const addLink = (event: FormEvent): void => {
     event.preventDefault()
     if (!pendingLink) return
-    onSave(current => addKnowledgeLink(
-      current,
-      page.id,
-      pendingLink,
-      { actor: HUMAN_ACTIVITY_ACTOR },
-    ))
-    recordUserOperation(
-      'link.add',
-      `Linked "${linkTitle.trim() || linkPath.trim()}" to page "${page.title}"`,
+    const label = linkTitle.trim() || linkPath.trim()
+    const title = page.title
+    afterSave(
+      onSave(current =>
+        addKnowledgeLink(current, page.id, pendingLink, {
+          actor: HUMAN_ACTIVITY_ACTOR,
+        }),
+      ),
+      () =>
+        recordUserOperation(
+          'link.add',
+          `Linked "${label}" to page "${title}"`,
+        ),
     )
     setLinkTitle('')
     setLinkPath('')
   }
 
+  const removeLink = (link: KnowledgeLink): void => {
+    afterSave(
+      onSave(current =>
+        removeKnowledgeLink(current, page.id, link.id, {
+          actor: HUMAN_ACTIVITY_ACTOR,
+        }),
+      ),
+      () =>
+        recordUserOperation(
+          'link.remove',
+          `Removed link "${link.title}" from page "${page.title}"`,
+        ),
+    )
+  }
+
   const addChildPage = (event: FormEvent): void => {
     event.preventDefault()
     if (!childTitle.trim()) return
-    onSave(current => {
-      const currentPage = current.pages.find(candidate => candidate.id === page.id)
-      if (!currentPage) return current
-      const rootPageId = current.spaces.find(space => space.id === currentPage.spaceId)?.rootPageId ?? null
-      return createKnowledgePage(
-        current,
-        {
-          spaceId: currentPage.spaceId,
-          parentId: currentPage.kind === 'wiki' ? currentPage.id : rootPageId,
-          kind: 'wiki',
-          title: childTitle,
-        },
-        { actor: HUMAN_ACTIVITY_ACTOR },
-      )
-    })
-    recordUserOperation(
-      'page.create',
-      `Created page "${childTitle.trim()}" under "${page.title}"`,
+    const trimmed = childTitle.trim()
+    const parentTitle = page.title
+    afterSave(
+      onSave(current => {
+        const currentPage = current.pages.find(candidate => candidate.id === page.id)
+        if (!currentPage) return current
+        const rootPageId = current.spaces.find(space => space.id === currentPage.spaceId)?.rootPageId ?? null
+        return createKnowledgePage(
+          current,
+          {
+            spaceId: currentPage.spaceId,
+            parentId: currentPage.kind === 'wiki' ? currentPage.id : rootPageId,
+            kind: 'wiki',
+            title: trimmed,
+          },
+          { actor: HUMAN_ACTIVITY_ACTOR },
+        )
+      }),
+      () =>
+        recordUserOperation(
+          'page.create',
+          `Created page "${trimmed}" under "${parentTitle}"`,
+        ),
     )
     setChildTitle('')
+  }
+
+  const copyTimerRef = useRef<number | null>(null)
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current)
+        copyTimerRef.current = null
+      }
+    }
+  }, [])
+
+  const copyWikiLink = (): void => {
+    const linkText = `[[${pageDisplayTitle(page, activeSpace.rootPageId)}]]`
+    const done = () => {
+      setCopiedWikiLink(true)
+      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current)
+      copyTimerRef.current = window.setTimeout(() => {
+        copyTimerRef.current = null
+        setCopiedWikiLink(false)
+      }, 1800)
+    }
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(linkText).then(done, () => {
+        setGalleryError('Could not copy wikilink to clipboard.')
+      })
+    } else {
+      setGalleryError('Clipboard access is unavailable in this window.')
+    }
+  }
+
+  const exportPageMarkdown = (): void => {
+    const content = `# ${page.title}\n\n${page.body}\n`
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${page.slug || 'page'}.md`
+    anchor.click()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    recordUserOperation('page.export', `Exported "${page.title}" as Markdown`)
+  }
+
+  const applyRenameBacklinkStrategy = (strategy: 'update-links' | 'add-alias'): void => {
+    if (!renameBacklinkOffer) return
+    const { oldTitle, newTitle } = renameBacklinkOffer
+    setRenameBacklinkOffer(null)
+    afterSave(
+      onSave(current =>
+        renameKnowledgePageWithBacklinks(
+          current,
+          page.id,
+          oldTitle,
+          newTitle,
+          strategy,
+          { actor: HUMAN_ACTIVITY_ACTOR },
+        ),
+      ),
+      () =>
+        recordUserOperation(
+          'page.update',
+          strategy === 'update-links'
+            ? `Updated backlinks from "${oldTitle}" to "${newTitle}"`
+            : `Added "${oldTitle}" as alias on "${newTitle}"`,
+        ),
+    )
   }
 
   const recentActivity = store.activity
@@ -3544,50 +4746,66 @@ function OpenPageEditor({
       ? pagePath
       : pagePath.filter(pathPage => pathPage.id !== page.id)
   const wikiLinks = extractWikiLinks(bodyDraft)
-  const childPages = getChildWikiPages(store, page.id)
+  const childPages = useMemo(() => {
+    if (page.id !== activeSpace.rootPageId) {
+      return getChildWikiPages(store, page.id)
+    }
+    const spaceWikiPages = getWikiPagesForSpace(store, activeSpace.id)
+    const spaceWikiIds = new Set(spaceWikiPages.map(candidate => candidate.id))
+    return spaceWikiPages
+      .filter(
+        candidate =>
+          candidate.id !== page.id &&
+          (candidate.parentId === page.id ||
+            candidate.parentId === null ||
+            !spaceWikiIds.has(candidate.parentId)),
+      )
+      .sort((a, b) => a.title.localeCompare(b.title))
+  }, [activeSpace.id, activeSpace.rootPageId, page.id, store])
   const openOrCreateWikiLink = (title: string): void => {
     const existing = findPageByWikiTitle(store, page.spaceId, title)
     if (existing) {
       onSelectPage(existing.id)
       return
     }
-    onSave(current => {
-      const currentExisting = findPageByWikiTitle(current, page.spaceId, title)
-      if (currentExisting) {
-        return { ...current, activeSpaceId: currentExisting.spaceId, activePageId: currentExisting.id }
-      }
-      const currentPage = current.pages.find(candidate => candidate.id === page.id)
-      if (!currentPage) return current
-      const rootPageId = current.spaces.find(space => space.id === currentPage.spaceId)?.rootPageId ?? null
-      return createKnowledgePage(
-        current,
-        {
-          spaceId: currentPage.spaceId,
-          parentId: currentPage.kind === 'wiki' ? currentPage.id : rootPageId,
-          kind: 'wiki',
-          title,
-        },
-        { actor: HUMAN_ACTIVITY_ACTOR },
-      )
-    })
-    recordUserOperation(
-      'page.create',
-      `Created page "${title}" from a wikilink on "${page.title}"`,
+    const sourceTitle = page.title
+    let created = false
+    afterSave(
+      onSave(current => {
+        created = false
+        const currentExisting = findPageByWikiTitle(current, page.spaceId, title)
+        if (currentExisting) {
+          return { ...current, activeSpaceId: currentExisting.spaceId, activePageId: currentExisting.id }
+        }
+        const currentPage = current.pages.find(candidate => candidate.id === page.id)
+        if (!currentPage) return current
+        created = true
+        const rootPageId = current.spaces.find(space => space.id === currentPage.spaceId)?.rootPageId ?? null
+        return createKnowledgePage(
+          current,
+          {
+            spaceId: currentPage.spaceId,
+            parentId: currentPage.kind === 'wiki' ? currentPage.id : rootPageId,
+            kind: 'wiki',
+            title,
+          },
+          { actor: HUMAN_ACTIVITY_ACTOR },
+        )
+      }),
+      () => {
+        if (created) {
+          recordUserOperation(
+            'page.create',
+            `Created page "${title}" from a wikilink on "${sourceTitle}"`,
+          )
+        }
+      },
     )
   }
 
-  const renderWikiLinkMarkdown = (text: string): string =>
-    normalizeWikiLinkEscapes(text).replace(
-      /\[\[([^\]]+)\]\]/g,
-      (_match, rawTitle: string) => {
-      const title = rawTitle.trim()
-      if (!title) return ''
-      const linkedPage = findPageByWikiTitle(store, page.spaceId, title)
-      const escapedTitle = escapeHtml(title)
-      return `<a href="#" data-wiki-title="${escapedTitle}" class="${
-        linkedPage ? '' : 'is-missing'
-      }">${escapedTitle}</a>`
-      },
+  const renderWikiLinkMarkdown = (html: string): string =>
+    renderWikiLinksInHtml(html, target =>
+      Boolean(findPageByWikiTitle(store, page.spaceId, target)),
     )
 
   // The rendered article is rebuilt only when its content or its links change.
@@ -3600,11 +4818,26 @@ function OpenPageEditor({
     () => store.pages.map(candidate => `${candidate.spaceId}\u0000${candidate.title}\u0000${candidate.slug}\u0000${candidate.kind}\u0000${candidate.createdAt}\u0000${(candidate.aliases ?? []).join('\u0001')}`).join('\n'),
     [store.pages],
   )
-  const renderedWikiHtml = useMemo(
-    () => editing ? '' : linkKnowledgeRefs(addKnowledgeGalleryControls(embedKnowledgeVideos(renderWikiLinkMarkdown(editorHtml))), store.pages),
+  const { renderedWikiHtml, outlineHeadings } = useMemo(() => {
+    if (editing) return { renderedWikiHtml: '', outlineHeadings: [] }
+    const prepared = linkKnowledgeRefs(
+      addKnowledgeGalleryControls(
+        embedKnowledgeVideos(renderWikiLinkMarkdown(editorHtml)),
+      ),
+      store.pages,
+    )
+    const sanitized = sanitizeHtml(prepared, {
+      allowTrustedVideoIframes: true,
+      allowLocalAssetSvgImg: true,
+      allowPreparedFsUrls: true,
+    })
+    const anchored = addHeadingAnchorsToHtml(sanitized)
+    return {
+      renderedWikiHtml: anchored.html,
+      outlineHeadings: anchored.headings,
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [editorHtml, editing, wikiTitleKey, page?.spaceId],
-  )
+  }, [editorHtml, editing, wikiTitleKey, page?.spaceId])
   // The same object each render too: React rewrites innerHTML whenever this
   // prop object changes, even when the string inside is identical.
   const renderedWikiInnerHtml = useMemo(() => ({ __html: renderedWikiHtml }), [renderedWikiHtml])
@@ -3613,6 +4846,16 @@ function OpenPageEditor({
   // when the page is drawn and whenever the page's width changes.
   const wikiBodyRef = useRef<HTMLDivElement>(null)
   const [expandedTable, setExpandedTable] = useState<string | null>(null)
+  const sanitizedExpandedTable = useMemo(
+    () =>
+      expandedTable !== null
+        ? sanitizeHtml(expandedTable, {
+            allowLocalAssetSvgImg: true,
+            allowPreparedFsUrls: true,
+          })
+        : null,
+    [expandedTable],
+  )
   useLayoutEffect(() => {
     const body = wikiBodyRef.current
     if (!body) return
@@ -3650,11 +4893,12 @@ function OpenPageEditor({
   }
 
   const saveGalleryBody = (
-    body: string,
+    rawBody: string,
     summary: string,
     importedLinks: Array<{ title: string; path: string }> = [],
     expected?: { pageId: string; baseBody: string },
   ): void => {
+    const body = normalizeWikiLinkEscapes(rawBody)
     const destinationPageId = expected?.pageId ?? page.id
     if (!expected && body === bodyDraft) return
     const visibleDraft = latestDraftRef.current
@@ -3664,7 +4908,7 @@ function OpenPageEditor({
     ) setBodyDraft(body)
     noteSent(body)
     let applied = false
-    onSave(current => {
+    const saveResult = onSave(current => {
       const destination = current.pages.find(candidate => candidate.id === destinationPageId)
       if (!destination || (expected && destination.body !== expected.baseBody)) {
         return current
@@ -3678,8 +4922,11 @@ function OpenPageEditor({
       }
       return next
     })
-    if (applied) recordUserOperation('page.update', summary)
-    else setGalleryError('The page changed while images were being added. No gallery changes were saved; try again.')
+    if (applied) {
+      afterSave(saveResult, () => recordUserOperation('page.update', summary))
+    } else {
+      setGalleryError('The page changed while images were being added. No gallery changes were saved; try again.')
+    }
   }
 
   const editableGalleryBody = (): string =>
@@ -3762,17 +5009,28 @@ function OpenPageEditor({
         event.preventDefault()
         const image = download.closest('figure')?.querySelector<HTMLImageElement>('img[src]')
         if (!image) return
-        const relativePath = image.getAttribute('data-writer-asset-src')?.trim() || ''
-        const fileName = relativePath.split('/').pop() || `${image.alt || 'image'}.png`
+        const rawRelativePath = image.getAttribute('data-writer-asset-src')?.trim() || ''
+        const safeRelative = rawRelativePath
+          ? resolveSafePackageRelativeAssetPath(rawRelativePath, packagePath)
+          : null
+        if (rawRelativePath && !safeRelative) {
+          setGalleryError('Cannot download an image outside this knowledge package.')
+          return
+        }
+        const fileName = safeRelative?.split('/').pop() || `${image.alt || 'image'}.png`
         setGalleryError('')
-        if (window.parent === window || !relativePath) {
+        if (window.parent === window || !safeRelative) {
           const anchor = document.createElement('a')
           anchor.href = image.currentSrc || image.src
           anchor.download = fileName
           anchor.click()
           recordUserOperation('image.download', `Downloaded “${fileName}” from “${page.title}”`)
         } else {
-          const sourcePath = `${packagePath.replace(/\/+$/, '')}/${relativePath.replace(/^\/+/, '')}`
+          const sourcePath = `${packagePath.replace(/\/+$/, '')}/${safeRelative}`
+          if (!isAbsolutePathInsidePackage(sourcePath, packagePath)) {
+            setGalleryError('Cannot download an image outside this knowledge package.')
+            return
+          }
           void savePlatformBinaryFileAs(sourcePath, fileName)
             .then(savedPath => {
               if (savedPath) recordUserOperation('image.download', `Downloaded “${fileName}” from “${page.title}”`, { refs: { path: savedPath } })
@@ -3930,11 +5188,42 @@ function OpenPageEditor({
                 </StyledReadTitle>
               )}
             </StyledWikiPageHeader>
-            <GuidanceDetails key={page.id} page={page} store={store} onSave={onSaveGuidance} onSelectPage={onSelectPage} />
+            <GuidanceDetails key={`guidance-${page.id}`} page={page} store={store} onSave={onSaveGuidance} onSelectPage={onSelectPage} />
             {compact && isPolicy(page) ? (
               <p className="knowledge-compact-note" role="note">
                 Policy · {knowledgeStatus(page).replaceAll('-', ' ')}. Edits stay a draft until published in the full app.
               </p>
+            ) : null}
+            {renameBacklinkOffer ? (
+              <StyledNoticeBanner role="status">
+                <span>
+                  Renamed from <strong>“{renameBacklinkOffer.oldTitle}”</strong> —{' '}
+                  {renameBacklinkOffer.count} page{renameBacklinkOffer.count === 1 ? '' : 's'} link to the old title.
+                </span>
+                <StyledChipRow style={{ marginTop: 0 }}>
+                  <Button
+                    variant="subtle"
+                    size="sm"
+                    onClick={() => applyRenameBacklinkStrategy('update-links')}
+                  >
+                    Update wikilinks
+                  </Button>
+                  <Button
+                    variant="subtle"
+                    size="sm"
+                    onClick={() => applyRenameBacklinkStrategy('add-alias')}
+                  >
+                    Add as alias
+                  </Button>
+                  <Button
+                    variant="subtle"
+                    size="sm"
+                    onClick={() => setRenameBacklinkOffer(null)}
+                  >
+                    Dismiss
+                  </Button>
+                </StyledChipRow>
+              </StyledNoticeBanner>
             ) : null}
             {keptNote && <p role="status">{keptNote}</p>}
             {dropError && <p role="alert">{dropError}</p>}
@@ -4003,6 +5292,35 @@ function OpenPageEditor({
                     ) : null}
                   </StyledChipRow>
                   <StyledChipRow>
+                    <StyledIconButton
+                      {...compactHide}
+                      type="button"
+                      aria-label="Copy wikilink"
+                      title={copiedWikiLink ? 'Copied wikilink' : 'Copy [[wikilink]]'}
+                      onClick={copyWikiLink}
+                    >
+                      <PlatformIcon icon={copiedWikiLink ? Check : Copy} size={14} strokeWidth={1.8} />
+                    </StyledIconButton>
+                    <StyledIconButton
+                      {...compactHide}
+                      type="button"
+                      aria-label="Export Markdown"
+                      title="Export page as .md"
+                      onClick={exportPageMarkdown}
+                    >
+                      <PlatformIcon icon={Download} size={14} strokeWidth={1.8} />
+                    </StyledIconButton>
+                    {onDeletePage && page.id !== activeSpace.rootPageId ? (
+                      <StyledIconButton
+                        {...compactHide}
+                        type="button"
+                        aria-label={page.kind === 'note' ? 'Delete note' : 'Delete page'}
+                        title={page.kind === 'note' ? 'Delete note' : 'Delete page'}
+                        onClick={() => onDeletePage(page)}
+                      >
+                        <PlatformIcon icon={Trash2} size={14} strokeWidth={1.8} />
+                      </StyledIconButton>
+                    ) : null}
                     <StyledActivityWrap ref={activityRef} {...compactHide}>
                       <StyledIconButton
                         type="button"
@@ -4039,7 +5357,52 @@ function OpenPageEditor({
                     </StyledEditPageButton>
                   </StyledChipRow>
                 </StyledWikiMeta>
+                {!compact && (page.tags.length > 0 || (page.aliases?.length ?? 0) > 0) ? (
+                  <StyledChipRow {...compactHide} style={{ marginTop: 6 }}>
+                    {page.tags.map(tag => (
+                      <StyledTagChipButton
+                        key={tag}
+                        type="button"
+                        onClick={() => onSelectTag?.(tag)}
+                      >
+                        #{tag}
+                      </StyledTagChipButton>
+                    ))}
+                    {page.aliases?.length ? (
+                      <StyledContextMeta>
+                        Also known as: {page.aliases.join(', ')}
+                      </StyledContextMeta>
+                    ) : null}
+                  </StyledChipRow>
+                ) : null}
                 <StyledWikiRule />
+                {!compact && outlineHeadings.length >= 2 ? (
+                  <StyledOutlineNav aria-label="Page outline" {...compactHide}>
+                    <details open>
+                      <summary>Outline</summary>
+                      <ul>
+                        {outlineHeadings.map(heading => (
+                          <li
+                            key={heading.id}
+                            style={{ paddingLeft: `${Math.max(0, heading.level - 1) * 12}px` }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const target = wikiBodyRef.current?.querySelector(
+                                  `#${CSS.escape ? CSS.escape(heading.id) : heading.id}`,
+                                )
+                                target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                              }}
+                            >
+                              {heading.text}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  </StyledOutlineNav>
+                ) : null}
                 {renderWikiText(bodyDraft)}
               </>
             )}
@@ -4176,7 +5539,7 @@ function OpenPageEditor({
               </StyledWikiIndex>
             ) : null}
 
-            <PolicyPanel page={page} editing={editing} onChange={changed=>onSave(current=>{const live=current.pages.find(p=>p.id===page.id);if(JSON.stringify(live)!==JSON.stringify(page))throw Error('This policy changed. Read its current wording before publishing.');return updateKnowledgePage(current,page.id,{governance:changed.governance},{actor:HUMAN_ACTIVITY_ACTOR})})}/>
+            <PolicyPanel key={`policy-${page.id}`} page={page} editing={editing} onChange={changed=>onSave(current=>{const live=current.pages.find(p=>p.id===page.id);if(JSON.stringify(live)!==JSON.stringify(page))throw Error('This policy changed. Read its current wording before publishing.');return updateKnowledgePage(current,page.id,{governance:changed.governance},{actor:HUMAN_ACTIVITY_ACTOR})})}/>
             {editing ? (
               <StyledPageMetadataPanel {...compactHide}>
                 <PagePlacement page={page} store={store} onChange={parentId=>onSave(current=>updateKnowledgePage(current,page.id,{parentId},{actor:HUMAN_ACTIVITY_ACTOR}))}/>
@@ -4190,11 +5553,25 @@ function OpenPageEditor({
                     onBlur={commitPage}
                   />
                 </StyledTagFieldLane>
+                <StyledFieldLabel htmlFor="page-aliases">Aliases</StyledFieldLabel>
+                <StyledTagFieldLane>
+                  <TextField
+                    id="page-aliases"
+                    value={aliasesDraft}
+                    placeholder="Alternate titles, comma-separated"
+                    onChange={event => setAliasesDraft(event.target.value)}
+                    onBlur={commitPage}
+                  />
+                </StyledTagFieldLane>
 
                 <StyledFieldLabel>Linked resources</StyledFieldLabel>
                 {page.links.length ? (
                   page.links.map(link => (
-                    <KnowledgeLinkRow key={link.id} link={link} />
+                    <KnowledgeLinkRow
+                      key={link.id}
+                      link={link}
+                      onRemove={() => removeLink(link)}
+                    />
                   ))
                 ) : (
                   <StyledSubtle>No linked resources yet.</StyledSubtle>
@@ -4229,7 +5606,11 @@ function OpenPageEditor({
               <>
                 <StyledFieldLabel>Linked resources</StyledFieldLabel>
                 {page.links.map(link => (
-                  <KnowledgeLinkRow key={link.id} link={link} />
+                  <KnowledgeLinkRow
+                    key={link.id}
+                    link={link}
+                    onRemove={() => removeLink(link)}
+                  />
                 ))}
               </>
             ) : null}
@@ -4290,21 +5671,21 @@ function OpenPageEditor({
         </StyledEditorBody>
       </StyledEditorPane>
       <Modal
-        open={expandedTable !== null}
+        open={sanitizedExpandedTable !== null}
         onClose={() => setExpandedTable(null)}
         title={page?.title ?? 'Table'}
         size="xl"
         closeOnEscape
         closeOnBackdropClick
       >
-        {expandedTable !== null ? (
+        {sanitizedExpandedTable !== null ? (
           <StyledTablePreview
             data-chrome="reading"
             onClick={event => {
               handleRenderedWikiClick(event)
               if (event.target instanceof Element && event.target.closest('a[data-knowledge-page], a[data-wiki-title]')) setExpandedTable(null)
             }}
-            dangerouslySetInnerHTML={{ __html: expandedTable }}
+            dangerouslySetInnerHTML={{ __html: sanitizedExpandedTable }}
           />
         ) : null}
       </Modal>
@@ -4393,12 +5774,14 @@ function agentRefs(page: Pick<KnowledgePage, 'id' | 'slug' | 'title'>): { 'data-
 function CompactPageList({
   store,
   query,
+  meaningHits,
   onQueryChange,
   onOpenPage,
   onCreatePage,
 }: {
   store: KnowledgeStore
   query: string
+  meaningHits?: Map<string, KnowledgeMeaningHit> | null
   onQueryChange: (query: string) => void
   onOpenPage: (pageId: string) => void
   onCreatePage: (title: string) => void
@@ -4409,10 +5792,21 @@ function CompactPageList({
   const rows = useMemo(() => {
     // A space's root page is its index, not something to look up: it shows only when a search finds it.
     const roots = new Set(store.spaces.map(space => space.rootPageId))
+    if (searching && meaningHits) {
+      return [...meaningHits.values()].map(hit => ({
+        page: hit.page,
+        text: pageSnippet({ ...hit.page, body: hit.snippet }),
+        meaning: hit.matched === 'meaning',
+      }))
+    }
     return rankKnowledgePages(store, query, store.pages.length, 'all')
       .filter(hit => searching || !roots.has(hit.page.id))
-      .map(hit => ({ page: hit.page, text: pageSnippet({ ...hit.page, body: hit.snippet }) }))
-  }, [query, searching, store])
+      .map(hit => ({
+        page: hit.page,
+        text: pageSnippet({ ...hit.page, body: hit.snippet }),
+        meaning: false,
+      }))
+  }, [meaningHits, query, searching, store])
 
   if (!searching && !rows.length) {
     return (
@@ -4465,9 +5859,10 @@ function CompactPageList({
       </div>
       {rows.length ? (
         <ul className="knowledge-compact-rows">
-          {rows.map(({ page, text }) => {
+          {rows.map(({ page, text, meaning: matchedByMeaning }) => {
             const space = store.spaces.find(candidate => candidate.id === page.spaceId)
             const meta = [
+              matchedByMeaning ? 'Close in meaning' : '',
               page.kind === 'note' ? 'Note' : '',
               page.guidanceStatus ? guidanceMetadata(page).statusLabel : '',
               store.spaces.length > 1 ? space?.name ?? '' : '',
@@ -4499,8 +5894,10 @@ function CompactPageList({
 
 function KnowledgeLinkRow({
   link,
+  onRemove,
 }: {
   link: KnowledgeLink
+  onRemove?: () => void
 }): React.ReactElement {
   const openable = canOpenKnowledgeLink(link)
   const openLink = (): void => {
@@ -4523,19 +5920,31 @@ function KnowledgeLinkRow({
         <strong>{link.title}</strong>
         <StyledSubtle>{link.path || link.url || link.resourceId}</StyledSubtle>
       </div>
-      <Button
-        variant="subtle"
-        size="sm"
-        onClick={openLink}
-        disabled={!openable}
-        title={
-          openable
-            ? undefined
-            : 'This link has no file path or valid web address, so it cannot be opened from here'
-        }
-      >
-        Open
-      </Button>
+      <StyledChipRow style={{ marginTop: 0 }}>
+        <Button
+          variant="subtle"
+          size="sm"
+          onClick={openLink}
+          disabled={!openable}
+          title={
+            openable
+              ? undefined
+              : 'This link has no file path or valid web address, so it cannot be opened from here'
+          }
+        >
+          Open
+        </Button>
+        {onRemove ? (
+          <Button
+            variant="subtle"
+            size="sm"
+            aria-label={`Remove link ${link.title}`}
+            onClick={onRemove}
+          >
+            Remove
+          </Button>
+        ) : null}
+      </StyledChipRow>
     </StyledLinkRow>
   )
 }

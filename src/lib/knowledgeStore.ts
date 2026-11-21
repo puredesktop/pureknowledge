@@ -78,17 +78,205 @@ export function normalizeWikiLinkEscapes(text: string): string {
   return text.replace(/\\\[\\\[([^\]]*?)\\\]\\\]/g, '[[$1]]')
 }
 
+function stripInlineCode(line: string): string {
+  let out = ''
+  let i = 0
+  while (i < line.length) {
+    if (line[i] === '`') {
+      let tickEnd = i
+      while (tickEnd < line.length && line[tickEnd] === '`') tickEnd += 1
+      const ticks = line.slice(i, tickEnd)
+      const close = line.indexOf(ticks, tickEnd)
+      if (close !== -1) {
+        out += ' '
+        i = close + ticks.length
+        continue
+      }
+      out += ticks
+      i = tickEnd
+      continue
+    }
+    out += line[i]
+    i += 1
+  }
+  return out
+}
+
+function stripCodeBlocksAndInlineCode(body: string): string {
+  const lines = body.replace(/\r\n?/g, '\n').split('\n')
+  const kept: string[] = []
+  let fenceChar: '`' | '~' | null = null
+  let fenceLen = 0
+  for (const line of lines) {
+    const fenceMatch = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(line)
+    if (fenceMatch) {
+      const marker = fenceMatch[1]!
+      if (!fenceChar) {
+        fenceChar = marker[0] as '`' | '~'
+        fenceLen = marker.length
+        continue
+      }
+      if (
+        marker[0] === fenceChar &&
+        marker.length >= fenceLen &&
+        new RegExp(`^[ \\t]{0,3}${fenceChar}{${fenceLen},}[ \\t]*$`).test(line)
+      ) {
+        fenceChar = null
+        fenceLen = 0
+        continue
+      }
+    }
+    if (!fenceChar) {
+      kept.push(stripInlineCode(line))
+    }
+  }
+  return kept.join('\n')
+}
+
 export function extractWikiLinks(body: string): string[] {
   const links = new Set<string>()
   const pattern = /\[\[([^\]]+)\]\]/g
-  body = normalizeWikiLinkEscapes(body)
-  let match = pattern.exec(body)
+  const searchable = normalizeWikiLinkEscapes(stripCodeBlocksAndInlineCode(body))
+  let match = pattern.exec(searchable)
   while (match) {
-    const title = match[1]?.trim()
+    const raw = match[1] ?? ''
+    const pipeIdx = raw.indexOf('|')
+    const title = (pipeIdx === -1 ? raw : raw.slice(0, pipeIdx)).trim()
     if (title) links.add(title)
-    match = pattern.exec(body)
+    match = pattern.exec(searchable)
   }
   return [...links]
+}
+
+export interface MarkdownHeadingItem {
+  text: string
+  level: number
+  id: string
+}
+
+/** Extract markdown headings while skipping fenced code blocks. */
+export function extractMarkdownHeadings(body: string): MarkdownHeadingItem[] {
+  const lines = body.replace(/\r\n?/g, '\n').split('\n')
+  const headings: MarkdownHeadingItem[] = []
+  const seen = new Map<string, number>()
+  let fenceChar: '`' | '~' | null = null
+  let fenceLen = 0
+  for (const line of lines) {
+    const fenceMatch = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(line)
+    if (fenceMatch) {
+      const marker = fenceMatch[1]!
+      if (!fenceChar) {
+        fenceChar = marker[0] as '`' | '~'
+        fenceLen = marker.length
+        continue
+      }
+      if (
+        marker[0] === fenceChar &&
+        marker.length >= fenceLen &&
+        new RegExp(`^[ \\t]{0,3}${fenceChar}{${fenceLen},}[ \\t]*$`).test(line)
+      ) {
+        fenceChar = null
+        fenceLen = 0
+        continue
+      }
+    }
+    if (fenceChar) continue
+    const match = /^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/.exec(line)
+    if (!match) continue
+    const text = match[2]!.trim()
+    if (!text) continue
+    const base =
+      text
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'section'
+    const count = seen.get(base) ?? 0
+    seen.set(base, count + 1)
+    headings.push({
+      text,
+      level: match[1]!.length,
+      id: count === 0 ? `heading-${base}` : `heading-${base}-${count}`,
+    })
+  }
+  return headings
+}
+
+/** Rewrite wikilinks targeting `oldTitle` to `newTitle`, preserving piped display labels and skipping code. */
+export function rewriteWikiLinksForRename(
+  body: string,
+  oldTitle: string,
+  newTitle: string,
+): string {
+  const oldNeedle = oldTitle.trim().toLowerCase()
+  const nextTitle = newTitle.trim()
+  if (!oldNeedle || !nextTitle || oldNeedle === nextTitle.toLowerCase()) {
+    return body
+  }
+  const replaceSegment = (segment: string): string =>
+    segment.replace(
+      /(?:\\\[\\\[|\[\[)([^\]]+?)(?:\\\]\\\]|\]\])/g,
+      (whole, raw: string) => {
+        const pipeIdx = raw.indexOf('|')
+        const target = (pipeIdx === -1 ? raw : raw.slice(0, pipeIdx)).trim()
+        if (target.toLowerCase() !== oldNeedle) return whole
+        if (pipeIdx === -1) return `[[${nextTitle}]]`
+        const display = raw.slice(pipeIdx + 1)
+        return `[[${nextTitle}|${display}]]`
+      },
+    )
+
+  const lines = body.split('\n')
+  let fenceChar: '`' | '~' | null = null
+  let fenceLen = 0
+  return lines
+    .map(rawLine => {
+      const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+      const eol = rawLine.endsWith('\r') ? '\r' : ''
+      const fenceMatch = /^[ \t]{0,3}(`{3,}|~{3,})/.exec(line)
+      if (fenceMatch) {
+        const marker = fenceMatch[1]!
+        if (!fenceChar) {
+          fenceChar = marker[0] as '`' | '~'
+          fenceLen = marker.length
+          return rawLine
+        }
+        if (
+          marker[0] === fenceChar &&
+          marker.length >= fenceLen &&
+          new RegExp(`^[ \\t]{0,3}${fenceChar}{${fenceLen},}[ \\t]*$`).test(line)
+        ) {
+          fenceChar = null
+          fenceLen = 0
+          return rawLine
+        }
+      }
+      if (fenceChar) return rawLine
+      // Preserve inline code spans while rewriting text around them
+      let out = ''
+      let i = 0
+      let plainStart = 0
+      while (i < line.length) {
+        if (line[i] === '`') {
+          let tickEnd = i
+          while (tickEnd < line.length && line[tickEnd] === '`') tickEnd += 1
+          const ticks = line.slice(i, tickEnd)
+          const close = line.indexOf(ticks, tickEnd)
+          if (close !== -1) {
+            out += replaceSegment(line.slice(plainStart, i))
+            out += line.slice(i, close + ticks.length)
+            i = close + ticks.length
+            plainStart = i
+            continue
+          }
+          i = tickEnd
+          continue
+        }
+        i += 1
+      }
+      out += replaceSegment(line.slice(plainStart))
+      return out + eol
+    })
+    .join('\n')
 }
 
 /**
@@ -335,6 +523,34 @@ export function createKnowledgeSpace(
   }
 }
 
+export function renameKnowledgeSpace(
+  store: KnowledgeStore,
+  spaceId: string,
+  nextName: string,
+  options: KnowledgeMutationOptions = {},
+): KnowledgeStore {
+  const name = nextName.trim()
+  if (!name) return store
+  const existing = store.spaces.find(space => space.id === spaceId)
+  if (!existing || existing.name === name) return store
+  const at = now()
+  return {
+    ...store,
+    spaces: store.spaces.map(space =>
+      space.id === spaceId ? { ...space, name, updatedAt: at } : space,
+    ),
+    activity: [
+      activity(
+        'page.updated',
+        `Renamed space ${existing.name} to ${name}`,
+        existing.rootPageId ?? undefined,
+        options.actor,
+      ),
+      ...store.activity,
+    ],
+  }
+}
+
 export function createKnowledgePage(
   store: KnowledgeStore,
   input: CreatePageInput,
@@ -381,7 +597,10 @@ export function updateKnowledgePage(
   store: KnowledgeStore,
   pageId: string,
   patch: Partial<
-    Pick<KnowledgePage, 'title' | 'body' | 'tags' | 'kind' | 'parentId' | 'governance'>
+    Pick<
+      KnowledgePage,
+      'title' | 'body' | 'tags' | 'kind' | 'parentId' | 'governance' | 'aliases' | 'links'
+    >
   > & GuidancePatch,
   options: KnowledgeMutationOptions = {},
 ): KnowledgeStore {
@@ -391,6 +610,8 @@ export function updateKnowledgePage(
   const title = patch.title?.trim() || page.title
   const body = patch.body ?? page.body
   const tags = patch.tags ?? page.tags
+  const aliases = patch.aliases ?? page.aliases
+  const links = patch.links ?? page.links
   const kind = patch.kind ?? page.kind
   const parentId = patch.parentId === undefined ? page.parentId : patch.parentId
   const governance = patch.governance ?? page.governance ?? (store.pages.find(p=>p.id===parentId)?.tags.includes('policy-directory') ? {category:'policy' as const} : undefined)
@@ -408,17 +629,25 @@ export function updateKnowledgePage(
     }
   }
 
+  const sameAliases =
+    (aliases ?? []).length === (page.aliases ?? []).length &&
+    (aliases ?? []).every((alias, index) => alias === (page.aliases ?? [])[index])
+  const sameLinks =
+    links === page.links || JSON.stringify(links) === JSON.stringify(page.links)
+
   if (
     (patch.guidanceStatus === undefined || (patch.guidanceStatus ?? undefined) === page.guidanceStatus) &&
     (patch.replacementPageId === undefined || patch.replacementPageId === page.replacementPageId) &&
-    (patch.lastChecked === undefined || JSON.stringify(patch.lastChecked) === JSON.stringify(page.lastChecked)) &&
+    (patch.lastChecked === undefined || JSON.stringify(patch.lastChecked ?? undefined) === JSON.stringify(page.lastChecked)) &&
     title === page.title &&
     body === page.body &&
     kind === page.kind &&
     parentId === page.parentId &&
     tags.length === page.tags.length &&
-    tags.every((tag, index) => tag === page.tags[index])
-    && JSON.stringify(governance) === JSON.stringify(page.governance)
+    tags.every((tag, index) => tag === page.tags[index]) &&
+    sameAliases &&
+    sameLinks &&
+    JSON.stringify(governance) === JSON.stringify(page.governance)
   ) {
     return store
   }
@@ -428,12 +657,14 @@ export function updateKnowledgePage(
     ...page,
     ...contentPatch,
     ...(guidanceStatus === undefined ? {} : { guidanceStatus: guidanceStatus ?? undefined }),
-    ...(lastChecked === undefined ? {} : { lastChecked }),
+    ...(lastChecked === undefined ? {} : { lastChecked: lastChecked ?? undefined }),
     ...(replacementPageId === undefined ? {} : { replacementPageId }),
     ...(governance ? {governance} : {}),
     title,
     body,
     tags,
+    ...(aliases !== undefined ? { aliases } : {}),
+    links,
     kind,
     parentId,
     slug: title === page.title ? page.slug : slugifyPageTitle(title),
@@ -443,6 +674,7 @@ export function updateKnowledgePage(
   }
 
   if (guidanceStatus === null) delete nextPage.guidanceStatus
+  if (lastChecked === null) delete nextPage.lastChecked
   const promoted = page.kind === 'note' && nextPage.kind === 'wiki'
 
   return {
@@ -607,6 +839,83 @@ export function addKnowledgeLink(
   }
 }
 
+export function removeKnowledgeLink(
+  store: KnowledgeStore,
+  pageId: string,
+  linkId: string,
+  options: KnowledgeMutationOptions = {},
+): KnowledgeStore {
+  const page = store.pages.find(candidate => candidate.id === pageId)
+  if (!page) return store
+  const link = page.links.find(candidate => candidate.id === linkId)
+  if (!link) return store
+  return {
+    ...store,
+    pages: store.pages.map(candidate =>
+      candidate.id === pageId
+        ? {
+            ...candidate,
+            links: candidate.links.filter(item => item.id !== linkId),
+            updatedAt: now(),
+          }
+        : candidate,
+    ),
+    activity: [
+      activity(
+        'page.updated',
+        `Removed link ${link.title} from ${page.title}`,
+        pageId,
+        options.actor,
+      ),
+      ...store.activity,
+    ],
+  }
+}
+
+export function renameKnowledgePageWithBacklinks(
+  store: KnowledgeStore,
+  pageId: string,
+  oldTitle: string,
+  newTitle: string,
+  strategy: 'update-links' | 'add-alias',
+  options: KnowledgeMutationOptions = {},
+): KnowledgeStore {
+  const page = store.pages.find(candidate => candidate.id === pageId)
+  if (!page) return store
+  const trimmedOld = oldTitle.trim()
+  const trimmedNew = newTitle.trim() || page.title
+  if (!trimmedOld || trimmedOld.toLowerCase() === trimmedNew.toLowerCase()) {
+    return store
+  }
+
+  if (strategy === 'add-alias') {
+    const existing = page.aliases ?? []
+    if (existing.some(alias => alias.trim().toLowerCase() === trimmedOld.toLowerCase())) {
+      return store
+    }
+    return updateKnowledgePage(
+      store,
+      pageId,
+      { aliases: [...existing, trimmedOld] },
+      options,
+    )
+  }
+
+  let next = store
+  for (const candidate of store.pages) {
+    if (candidate.id === pageId || candidate.spaceId !== page.spaceId) continue
+    const rewritten = rewriteWikiLinksForRename(
+      candidate.body,
+      trimmedOld,
+      trimmedNew,
+    )
+    if (rewritten !== candidate.body) {
+      next = updateKnowledgePage(next, candidate.id, { body: rewritten }, options)
+    }
+  }
+  return next
+}
+
 export interface KnowledgePageSearchHit {
   page: KnowledgePage
   score: number
@@ -646,10 +955,12 @@ export function rankKnowledgePages(
       .slice(0, limit)
       .map(page => ({ page, score: 0, snippet: snippetFor(page) }))
   }
-  const hits: KnowledgePageSearchHit[] = []
+  const needle = query.trim().toLowerCase()
+  const hits: Array<KnowledgePageSearchHit & { exact: boolean }> = []
   for (const page of store.pages) {
     const title = page.title.toLowerCase()
-    const aliases = (page.aliases ?? []).join(' ').toLowerCase()
+    const aliasList = (page.aliases ?? []).map(alias => alias.trim().toLowerCase())
+    const aliases = aliasList.join(' ')
     const tags = page.tags.join(' ').toLowerCase()
     const body = page.body.toLowerCase()
     // Everything else the page is reachable by: slug, wikilink targets,
@@ -668,7 +979,8 @@ export function rankKnowledgePages(
       .filter(Boolean)
       .join(' ')
       .toLowerCase()
-    let score = 0
+    const exact = title === needle || aliasList.includes(needle)
+    let score = exact ? 10 : 0
     for (const term of terms) {
       if (title.includes(term)) score += 3
       if (aliases.includes(term)) score += 2
@@ -676,9 +988,16 @@ export function rankKnowledgePages(
       if (body.includes(term)) score += 1
       if (related.includes(term)) score += 1
     }
-    if (score > 0) hits.push({ page, score, snippet: snippetFor(page) })
+    if (score > 0) hits.push({ page, score, snippet: snippetFor(page), exact })
   }
-  return hits.sort((a, b) => guidancePriority(a.page) - guidancePriority(b.page) || b.score - a.score).slice(0, limit)
+  const lead = (hit: { exact: boolean; page: KnowledgePage }) =>
+    hit.exact && hit.page.guidanceStatus !== 'retired'
+      ? -1
+      : guidancePriority(hit.page)
+  return hits
+    .sort((a, b) => lead(a) - lead(b) || b.score - a.score)
+    .slice(0, limit)
+    .map(({ page, score, snippet }) => ({ page, score, snippet }))
 }
 
 /**
@@ -808,14 +1127,71 @@ function applyAgentChangeToPages(
     if (wouldCreateParentCycle(store, change.pageId, change.patch.mergeIntoPageId)) {
       throw new Error('A page cannot merge into its own descendant because that would delete the surviving page.')
     }
-    // The merged body was proposed against the surviving page; the source
-    // page is deleted once the survivor carries the combined content.
-    nextStore = updateKnowledgePage(
-      nextStore,
-      change.patch.mergeIntoPageId,
-      { body: change.patch.body },
-      { actor },
-    )
+    const sourcePage = nextStore.pages.find(p => p.id === change.pageId)
+    const targetPage = nextStore.pages.find(p => p.id === change.patch.mergeIntoPageId)
+    if (sourcePage && targetPage && sourcePage.spaceId !== targetPage.spaceId) {
+      throw new Error(`Cannot merge "${sourcePage.title}" into "${targetPage.title}" across different spaces.`)
+    }
+    if (sourcePage && targetPage) {
+      // Reparent direct children of the merged source page onto the survivor
+      // before deleting the source so children are preserved instead of cascade-deleted.
+      for (const child of nextStore.pages) {
+        if (child.parentId === sourcePage.id && child.id !== targetPage.id) {
+          nextStore = updateKnowledgePage(
+            nextStore,
+            child.id,
+            { parentId: targetPage.id },
+            { actor },
+          )
+        }
+      }
+      const mergedTags = Array.from(
+        new Set([...targetPage.tags, ...sourcePage.tags]),
+      )
+      const seenAliases = new Set([targetPage.title.trim().toLowerCase()])
+      const mergedAliases: string[] = []
+      for (const candidate of [
+        ...(targetPage.aliases ?? []),
+        ...(sourcePage.aliases ?? []),
+        sourcePage.title,
+      ]) {
+        const trimmed = candidate.trim()
+        const key = trimmed.toLowerCase()
+        if (trimmed && !seenAliases.has(key)) {
+          seenAliases.add(key)
+          mergedAliases.push(trimmed)
+        }
+      }
+      const seenLinks = new Set<string>()
+      const mergedLinks: KnowledgeLink[] = []
+      for (const link of [...targetPage.links, ...sourcePage.links]) {
+        const key = link.path || link.url || link.resourceId || link.id
+        if (!seenLinks.has(key)) {
+          seenLinks.add(key)
+          mergedLinks.push(link)
+        }
+      }
+      // The merged body was proposed against the surviving page; preserve
+      // source tags, links, aliases, and children before deleting the source.
+      nextStore = updateKnowledgePage(
+        nextStore,
+        targetPage.id,
+        {
+          body: change.patch.body,
+          tags: mergedTags,
+          aliases: mergedAliases,
+          links: mergedLinks,
+        },
+        { actor },
+      )
+    } else {
+      nextStore = updateKnowledgePage(
+        nextStore,
+        change.patch.mergeIntoPageId,
+        { body: change.patch.body },
+        { actor },
+      )
+    }
     nextStore = deleteKnowledgePage(nextStore, change.pageId, { actor })
   }
 
@@ -1098,7 +1474,12 @@ export function reviewKnowledgeStore(
   nowMs: number,
 ): KnowledgeReviewFinding[] {
   const findings: KnowledgeReviewFinding[] = []
-  const pages = store.pages.filter(page => page.spaceId === spaceId)
+  const pages = store.pages.filter(
+    page =>
+      page.spaceId === spaceId &&
+      page.guidanceStatus !== 'retired' &&
+      !page.governance?.archived,
+  )
   const rootIds = new Set(
     store.spaces.map(space => space.rootPageId).filter(Boolean) as string[],
   )

@@ -1,5 +1,6 @@
 import { Figure, toHtml, toMd } from '@purescience/platform-editor'
 import { normalizeCollectionDocumentHtml } from '@purescience/platform-ui/bridge/collectionDocumentHtml'
+import { isSafeUrl, sanitizeHtml } from './sanitizeHtml'
 
 const DEFAULT_SIZE = 96
 const MIN_SIZE = 48
@@ -31,16 +32,19 @@ function escapeHtml(value: string): string {
 }
 
 function escapeMarkdownAlt(value: string): string {
-  return value.replace(/([\\\]])/g, '\\$1')
+  return value.replace(/[\r\n]+/g, ' ').replace(/([\\\]])/g, '\\$1')
 }
 
 function parseImageLine(line: string): GalleryImage | null {
   const match = /^\s*!\[((?:\\.|[^\]])*)\]\((\S+?)(?:\s+["'].*["'])?\)(?:\s+\{background=(transparent|light|dark|checkerboard)\})?\s*$/.exec(line)
-  return match ? {
+  if (!match) return null
+  const src = match[2]
+  if (!isSafeUrl(src, 'gallery-src')) return null
+  return {
     alt: match[1].replace(/\\([\\\]])/g, '$1'),
-    src: match[2],
+    src,
     background: match[3] as GalleryImageBackground | undefined,
-  } : null
+  }
 }
 
 function imageMarkdown(image: GalleryImage): string {
@@ -55,8 +59,9 @@ function galleryStyle(options: GalleryOptions): string {
 }
 
 function galleryHtml(images: GalleryImage[], options: GalleryOptions): string {
+  const safeImages = images.filter(image => isSafeUrl(image.src, 'gallery-src'))
   const columns = options.columns === null ? '' : ` data-gallery-columns="${options.columns}"`
-  const figures = images.map(({ alt, src, background }) => {
+  const figures = safeImages.map(({ alt, src, background }) => {
     const safeAlt = escapeHtml(alt)
     const surface = background && background !== 'transparent'
       ? ` data-gallery-background="${background}"`
@@ -97,7 +102,7 @@ export function knowledgeMarkdownToHtml(markdown: string): string {
     output.push('', galleryHtml(images as GalleryImage[], parseOptions(opening[1])), '')
     index = closing + 1
   }
-  return toHtml(output.join('\n'))
+  return sanitizeHtml(toHtml(output.join('\n')))
 }
 
 function inferLegacyOptions(element: HTMLElement): GalleryOptions {
@@ -145,7 +150,8 @@ function galleryMarkdown(element: HTMLElement): string {
   const attributes = [`size=${options.size}`]
   if (options.columns !== null) attributes.push(`columns=${options.columns}`)
   const images = Array.from(element.querySelectorAll('img[src]')).map(image => {
-    const alt = image.closest('figure')?.querySelector('figcaption')?.textContent?.trim() || image.getAttribute('alt') || ''
+    const rawAlt = image.closest('figure')?.querySelector('figcaption')?.textContent?.trim() || image.getAttribute('alt') || ''
+    const alt = rawAlt.replace(/[\r\n]+/g, ' ').trim()
     const background = image.closest('figure')?.getAttribute('data-gallery-background') as GalleryImageBackground | null
     return imageMarkdown({ alt, src: image.getAttribute('src') ?? '', background: background ?? undefined })
   })
@@ -166,7 +172,7 @@ export function knowledgeHtmlToMarkdown(html: string, packagePath: string): stri
     gallery.replaceWith(marker)
   })
   let markdown = toMd(document.body.innerHTML)
-  for (const [token, gallery] of replacements) markdown = markdown.replace(token, gallery)
+  for (const [token, gallery] of replacements) markdown = markdown.replace(token, () => gallery)
   return markdown
 }
 
@@ -188,13 +194,16 @@ function changeGallery(
       continue
     }
     if (!/^\s*:::gallery(?:\s+.*?)?\s*$/.test(lines[start])) continue
-    found += 1
     const relativeEnd = lines.slice(start + 1).findIndex(line => /^\s*:::\s*$/.test(line))
-    if (relativeEnd < 0) return markdown
+    if (relativeEnd < 0) continue
     const end = start + 1 + relativeEnd
-    if (found !== galleryIndex) { start = end; continue }
     const images = lines.slice(start + 1, end).filter(line => line.trim()).map(parseImageLine)
-    if (images.some(image => image === null)) return markdown
+    if (images.length === 0 || images.some(image => image === null)) {
+      start = end
+      continue
+    }
+    found += 1
+    if (found !== galleryIndex) { start = end; continue }
     const nextImages = change(images as GalleryImage[])
     if (nextImages.length === 0) return [...lines.slice(0, start), ...lines.slice(end + 1)].join('\n').replace(/\n{3,}/g, '\n\n')
     return [...lines.slice(0, start + 1), ...nextImages.map(imageMarkdown), ...lines.slice(end)].join('\n')

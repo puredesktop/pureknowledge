@@ -53,14 +53,30 @@ function pageByRef(
   const candidates = exact.length
     ? exact
     : store.pages.filter(page => page.slug.toLowerCase() === lowered)
-  const active = candidates.filter(page => page.spaceId === store.activeSpaceId)
-  const matches = active.length ? active : candidates
+  const nonArchived = candidates.filter(page => !page.governance?.archived)
+  const pool = nonArchived.length ? nonArchived : candidates
+  const active = pool.filter(page => page.spaceId === store.activeSpaceId)
+  const matches = active.length ? active : pool
   if (matches.length > 1) {
     return {
       error: `"${ref}" matches multiple pages (${matches.map(page => `${page.title}: ${page.id}`).join(', ')}). Use its page id.`,
     }
   }
   return matches[0]
+}
+
+function safeEffectivePage(
+  page: KnowledgePage,
+  includeDrafts: boolean,
+): { page: KnowledgePage | null; error?: string } {
+  try {
+    return { page: effectiveKnowledgePage(page, includeDrafts) }
+  } catch (cause) {
+    return {
+      page: null,
+      error: cause instanceof Error ? cause.message : String(cause),
+    }
+  }
 }
 
 function spaceByRef(
@@ -200,7 +216,14 @@ export async function searchKnowledgeHandler(
       ? Math.max(1, Math.min(25, Math.floor(rawLimit)))
       : 10
   if (args.status !== undefined && !GUIDANCE_FILTERS.includes(args.status as GuidanceFilter)) return agentToolErrorContent('status must be all, unmarked, draft, current or retired.')
-  const effectiveStore={...store,pages:store.pages.filter(p=>!p.governance?.archived).map(p=>effectiveKnowledgePage(p,args.includeDrafts===true)).filter((p):p is KnowledgePage=>p!==null)}
+  const includeDrafts = args.includeDrafts === true
+  const effectivePages: KnowledgePage[] = []
+  for (const p of store.pages) {
+    if (p.governance?.archived && !includeDrafts) continue
+    const resolved = safeEffectivePage(p, includeDrafts)
+    if (resolved.page) effectivePages.push(resolved.page)
+  }
+  const effectiveStore = { ...store, pages: effectivePages }
   const status = args.status as GuidanceFilter | undefined
   const asked = query.trim()
   // The same ranking the search box uses (lib/knowledgeMeaning); words alone when meaning cannot answer, and it says so.
@@ -258,8 +281,17 @@ export function readKnowledgePageHandler(
       `No page matching "${ref}". searchKnowledge finds pages by content.`,
     )
   }
-  const effective=effectiveKnowledgePage(page,args.includeDrafts===true)
-  if(!effective) return agentToolErrorContent('This is an unpublished policy draft. Request includeDrafts to review it; it is not company policy.')
+  if (page.governance?.archived && args.includeDrafts !== true) {
+    return agentToolErrorContent(
+      `"${page.title}" is archived. Pass includeDrafts: true to read archived pages.`,
+    )
+  }
+  const resolved = safeEffectivePage(page, args.includeDrafts === true)
+  if (resolved.error) {
+    return agentToolErrorContent(resolved.error)
+  }
+  const effective = resolved.page
+  if (!effective) return agentToolErrorContent('This is an unpublished policy draft. Request includeDrafts to review it; it is not company policy.')
   const part = readPagePart(effective.body, args)
   if ('error' in part) return agentToolErrorContent(part.error)
   return {
@@ -539,10 +571,22 @@ export async function applyKnowledgeChangeHandler(
       await context.saveStore(current => {
         const page = current.pages.find(candidate => candidate.id === existing!.id)
         if (!page) throw new Error('Page no longer available; search again.')
+        const nextGuidancePage: KnowledgePage = {
+          ...page,
+          ...(patch.guidanceStatus === undefined
+            ? {}
+            : { guidanceStatus: patch.guidanceStatus ?? undefined }),
+          ...(patch.lastChecked === undefined
+            ? {}
+            : { lastChecked: patch.lastChecked ?? undefined }),
+          ...(patch.replacementPageId === undefined
+            ? {}
+            : { replacementPageId: patch.replacementPageId }),
+        }
         return applyKnowledgeAgentChange(current, {
           spaceId: page.spaceId, pageId: page.id, agentName, changeType: 'page.update', title: page.title,
           summary: summary.trim(), before: JSON.stringify(guidanceMetadata(page)),
-          after: JSON.stringify({ ...guidanceMetadata(page), ...patch }), patch,
+          after: JSON.stringify(guidanceMetadata(nextGuidancePage)), patch,
         })
       })
       void recordOperation({ lane: 'agent', kind: 'knowledge.page.update', appSlug: KNOWLEDGE_APP_SLUG, summary: `${agentName}: ${summary.trim()}` }).catch(() => undefined)
@@ -598,6 +642,11 @@ export async function applyKnowledgeChangeHandler(
     if (resolvedMergeInto.id === existing?.id) {
       return agentToolErrorContent('A page cannot merge into itself.')
     }
+    if (existing && resolvedMergeInto.spaceId !== existing.spaceId) {
+      return agentToolErrorContent(
+        `Cannot merge "${existing.title}" into "${resolvedMergeInto.title}" across different spaces.`,
+      )
+    }
     if (existing && wouldCreateParentCycle(store, existing.id, resolvedMergeInto.id)) {
       return agentToolErrorContent(
         'A page cannot merge into its own descendant because that would delete the surviving page.',
@@ -634,11 +683,26 @@ export async function applyKnowledgeChangeHandler(
       `"${existing?.title}" is a space root and must remain a wiki page.`,
     )
   }
-  // Duplicate guard: creating a page whose title an existing page already
-  // carries is how a knowledge base rots — update that page instead.
+  if (existingIsRoot && parent) {
+    return agentToolErrorContent(
+      `"${existing?.title}" is a space root and must remain a top-level wiki page.`,
+    )
+  }
+  const spaceId =
+    parent?.spaceId ??
+    existing?.spaceId ??
+    store.activeSpaceId ??
+    store.spaces[0]?.id
+  if (!spaceId) {
+    return agentToolErrorContent('The knowledge base has no space yet.')
+  }
+  // Duplicate guard: creating a page whose title an existing page in the same
+  // space already carries is how a knowledge base rots — update that page instead.
   if (action === 'create') {
     const collision = store.pages.find(
-      page => page.title.toLowerCase() === title.toLowerCase(),
+      page =>
+        page.spaceId === spaceId &&
+        page.title.trim().toLowerCase() === title.toLowerCase(),
     )
     if (collision) {
       return agentToolErrorContent(
@@ -683,16 +747,10 @@ export async function applyKnowledgeChangeHandler(
   ]
   const changeType: KnowledgeAgentChangeType =
     action === 'create' ? 'page.create' : (`page.${action}` as const)
-  const spaceId =
-    existing?.spaceId ??
-    store.activeSpaceId ??
-    store.spaces[0]?.id
-  if (!spaceId) {
-    return agentToolErrorContent('The knowledge base has no space yet.')
-  }
   const agentName =
     readAgentToolStringArg(args, 'agentName')?.trim() || 'Assistant'
 
+  let resultPageId: string | undefined = existing?.id
   try {
     await context.saveStore(current => {
       const currentExisting = existing
@@ -701,9 +759,18 @@ export async function applyKnowledgeChangeHandler(
       if (existing && !currentExisting) {
         throw new Error(`"${existing.title}" was removed before this change could be applied; find its replacement and retry.`)
       }
+      const currentParent = parent
+        ? current.pages.find(page => page.id === parent.id)
+        : undefined
+      if (parent && !currentParent) {
+        throw new Error(`The parent page "${parent.title}" no longer exists; choose a parent and retry.`)
+      }
+      const targetSpaceId = currentParent?.spaceId ?? spaceId
       if (action === 'create') {
         const collision = current.pages.find(
-          page => page.title.toLowerCase() === title.toLowerCase(),
+          page =>
+            page.spaceId === targetSpaceId &&
+            page.title.trim().toLowerCase() === title.toLowerCase(),
         )
         if (collision) throw new Error(`A page titled "${collision.title}" already exists; update it instead.`)
       }
@@ -713,12 +780,6 @@ export async function applyKnowledgeChangeHandler(
       if (mergeInto && !currentMergeInto) {
         throw new Error(`The merge destination "${mergeInto.title}" no longer exists; choose a surviving page and retry.`)
       }
-      const currentParent = parent
-        ? current.pages.find(page => page.id === parent.id)
-        : undefined
-      if (parent && !currentParent) {
-        throw new Error(`The parent page "${parent.title}" no longer exists; choose a parent and retry.`)
-      }
       const baseBody = body?.trim() ?? (action === 'update' ? currentExisting?.body : '')
       const effectiveBody = [baseBody, importedMarkdown].filter(Boolean).join('\n\n')
       const before = action === 'merge' ? currentMergeInto?.body : currentExisting?.body
@@ -727,8 +788,8 @@ export async function applyKnowledgeChangeHandler(
         : action === 'rename' || action === 'promote'
           ? currentExisting?.body
           : effectiveBody || undefined
-      return applyKnowledgeAgentChange(current, {
-        spaceId: currentParent?.spaceId ?? spaceId,
+      const next = applyKnowledgeAgentChange(current, {
+        spaceId: targetSpaceId,
         ...(currentExisting ? { pageId: currentExisting.id } : {}),
         agentName,
         changeType,
@@ -746,6 +807,13 @@ export async function applyKnowledgeChangeHandler(
           ...(currentMergeInto ? { mergeIntoPageId: currentMergeInto.id } : {}),
         },
       })
+      resultPageId =
+        action === 'create'
+          ? next.activePageId ?? undefined
+          : action === 'merge'
+            ? currentMergeInto?.id ?? currentExisting?.id
+            : currentExisting?.id
+      return next
     })
   } catch (error) {
     return agentToolErrorContent(error instanceof Error ? error.message : String(error))
@@ -760,6 +828,7 @@ export async function applyKnowledgeChangeHandler(
   return {
     content: formatAgentToolJson({
       applied: changeType,
+      ...(resultPageId ? { pageId: resultPageId } : {}),
       title,
       ...(mergeInto ? { into: mergeInto.title } : {}),
       status: 'applied',

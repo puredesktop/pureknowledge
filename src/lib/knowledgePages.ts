@@ -63,12 +63,13 @@ export function serializePageFile(page: KnowledgePage): string {
 }
 
 export function parsePageFile(raw: string): KnowledgePage | null {
-  if (!raw.startsWith(FRONTMATTER_OPEN)) return null
-  const close = raw.indexOf(FRONTMATTER_CLOSE, FRONTMATTER_OPEN.length)
+  const normalized = raw.replace(/\r\n/g, '\n')
+  if (!normalized.startsWith(FRONTMATTER_OPEN)) return null
+  const close = normalized.indexOf(FRONTMATTER_CLOSE, FRONTMATTER_OPEN.length)
   if (close === -1) return null
   try {
     const meta = JSON.parse(
-      raw.slice(FRONTMATTER_OPEN.length, close),
+      normalized.slice(FRONTMATTER_OPEN.length, close),
     ) as PageMeta
     if (
       !meta ||
@@ -81,7 +82,7 @@ export function parsePageFile(raw: string): KnowledgePage | null {
     ) {
       return null
     }
-    const body = raw.slice(close + FRONTMATTER_CLOSE.length)
+    const body = normalized.slice(close + FRONTMATTER_CLOSE.length)
     return { ...meta, body }
   } catch {
     return null

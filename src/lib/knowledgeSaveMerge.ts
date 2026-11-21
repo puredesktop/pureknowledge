@@ -68,9 +68,28 @@ function mergePageFields(base: KnowledgePage | undefined, mine: KnowledgePage, d
     if (taken === undefined) delete merged[key]
     else merged[key] = taken
   }
-  // A link added on either side stays: links are only ever added.
-  const links = new Map([...disk.links, ...mine.links].map(link => [link.id, link]))
-  merged.links = [...links.values()]
+  // 3-way merge for links: keep links added on either side, and honour
+  // removals of links that existed in base.
+  if (!base) {
+    const links = new Map([...disk.links, ...mine.links].map(link => [link.id, link]))
+    merged.links = [...links.values()]
+  } else {
+    const baseIds = new Set(base.links.map(link => link.id))
+    const mineIds = new Set(mine.links.map(link => link.id))
+    const diskIds = new Set(disk.links.map(link => link.id))
+    const mergedLinks = new Map<string, KnowledgePage['links'][number]>()
+    for (const link of disk.links) {
+      if (!baseIds.has(link.id) || mineIds.has(link.id)) {
+        mergedLinks.set(link.id, link)
+      }
+    }
+    for (const link of mine.links) {
+      if (!mergedLinks.has(link.id) && (!baseIds.has(link.id) || diskIds.has(link.id))) {
+        mergedLinks.set(link.id, link)
+      }
+    }
+    merged.links = [...mergedLinks.values()]
+  }
   merged.updatedAt = newer.updatedAt
   const title = merged.title as string
   merged.slug = title === mine.title ? mine.slug : title === disk.title ? disk.slug : slugifyPageTitle(title)

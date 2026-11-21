@@ -167,6 +167,7 @@ async function saveKnowledgePackage(
   durable: KnowledgeStore,
   next: KnowledgeStore,
   heldCopy: boolean,
+  skippedPageNames: ReadonlySet<string> = new Set(),
 ): Promise<PackageSaveResult> {
   const baseById = new Map(durable.pages.map(page => [page.id, page]))
   const nextIds = new Set(next.pages.map(page => page.id))
@@ -211,6 +212,10 @@ async function saveKnowledgePackage(
     const removeFiles = async (id: string, except?: string) => {
       for (const entry of filesOf(id)) {
         if (entry.name === except) continue
+        const raw = await readOptionalFile(entry.path)
+        if (raw === null) continue
+        const parsed = parsePageFile(raw)
+        if (!parsed || parsed.id !== id) continue
         await deletePlatformFile(entry.path).catch(async cause => {
           const after = await listPlatformFiles(pagesDir)
           if (after.entries.some(file => file.name === entry.name)) throw cause
@@ -287,17 +292,31 @@ async function saveKnowledgePackage(
         ...activity,
       ]
     if (activityChanged || keptPages.length) {
-      const disk = await readJsonArrayQuietly<KnowledgeActivity>(joinPackagePath(packagePath, KNOWLEDGE_ACTIVITY_FILE))
+      const activityPath = joinPackagePath(packagePath, KNOWLEDGE_ACTIVITY_FILE)
+      const disk = await readJsonArrayWithStatus<KnowledgeActivity>(activityPath)
+      if (disk.corrupt) {
+        await renamePlatformFile(
+          activityPath,
+          `${KNOWLEDGE_ACTIVITY_FILE}.corrupt-${Date.now()}`,
+        ).catch(() => {})
+      }
       const known = new Set(activity.map(item => item.id))
-      if (disk.some(item => !known.has(item.id))) activity = mergeActivity(activity, disk)
-      await writeTextFile(joinPackagePath(packagePath, KNOWLEDGE_ACTIVITY_FILE), serializeKnowledgeActivity(activity))
+      if (disk.items.some(item => !known.has(item.id))) activity = mergeActivity(activity, disk.items)
+      await writeTextFile(activityPath, serializeKnowledgeActivity(activity))
     }
     let agentChanges = next.agentChanges ?? []
     if (proposalsChanged) {
-      const disk = await readJsonArrayQuietly<KnowledgeAgentChange>(joinPackagePath(packagePath, KNOWLEDGE_PROPOSALS_FILE))
-      const merged = mergeProposals(agentChanges, disk)
+      const proposalsPath = joinPackagePath(packagePath, KNOWLEDGE_PROPOSALS_FILE)
+      const disk = await readJsonArrayWithStatus<KnowledgeAgentChange>(proposalsPath)
+      if (disk.corrupt) {
+        await renamePlatformFile(
+          proposalsPath,
+          `${KNOWLEDGE_PROPOSALS_FILE}.corrupt-${Date.now()}`,
+        ).catch(() => {})
+      }
+      const merged = mergeProposals(agentChanges, disk.items)
       if (JSON.stringify(merged) !== JSON.stringify(agentChanges)) agentChanges = merged
-      await writeTextFile(joinPackagePath(packagePath, KNOWLEDGE_PROPOSALS_FILE), serializeKnowledgeProposals(agentChanges))
+      await writeTextFile(proposalsPath, serializeKnowledgeProposals(agentChanges))
     }
 
     const store: KnowledgeStore = { ...next, pages: nextPages, spaces, activity, agentChanges, activePageId }
@@ -309,10 +328,14 @@ async function saveKnowledgePackage(
       activity === next.activity &&
       agentChanges === (next.agentChanges ?? []) &&
       activePageId === next.activePageId
-    if (spacesChanged || placeChanged) {
+    const activePageChanged = activePageId !== next.activePageId
+    if (spacesChanged || placeChanged || activePageChanged) {
       const indexPath = joinPackagePath(packagePath, KNOWLEDGE_INDEX_FILE)
       const place = heldCopy ? parseIndexQuietly((await readOptionalFile(indexPath)) ?? '') : null
-      const placeStands = place && !removed.some(page => page.id === place.activePageId)
+      const placeStands =
+        place &&
+        !removed.some(page => page.id === place.activePageId) &&
+        (!place.activePageId || pageIds.has(place.activePageId))
       await writeTextFile(
         indexPath,
         serializeKnowledgeIndex(place && placeStands ? { ...store, activeSpaceId: place.activeSpaceId ?? store.activeSpaceId, activePageId: place.activePageId } : store),
@@ -325,9 +348,17 @@ async function saveKnowledgePackage(
     await registerPlatformAppObject({ appSlug: KNOWLEDGE_APP_SLUG, path: packagePath })
 
     // A page file this copy has never heard of, or a page it holds with no file: read the package again.
-    const suffixOf = (name: string) => name.slice(name.lastIndexOf('-'))
+    const suffixOf = (name: string): string | null => {
+      const hyphen = name.lastIndexOf('-')
+      return hyphen >= 0 ? name.slice(hyphen) : null
+    }
     const known = new Set([...baseById.keys(), ...nextIds].map(pageFileSuffix))
-    const present = new Set(listed.map(entry => suffixOf(entry.name)))
+    const present = new Set(
+      listed
+        .filter(entry => !skippedPageNames.has(entry.name))
+        .map(entry => suffixOf(entry.name))
+        .filter((suffix): suffix is string => suffix !== null),
+    )
     const arrivals =
       [...present].some(suffix => !known.has(suffix)) ||
       durable.pages.some(page => nextIds.has(page.id) && !present.has(pageFileSuffix(page.id)))
@@ -364,14 +395,18 @@ function parseIndexQuietly(raw: string): KnowledgeIndexFile | null {
   }
 }
 
-async function readJsonArrayQuietly<T>(path: string): Promise<T[]> {
+async function readJsonArrayWithStatus<T>(
+  path: string,
+): Promise<{ items: T[]; corrupt: boolean }> {
   const raw = await readOptionalFile(path)
-  if (raw === null) return []
+  if (raw === null) return { items: [], corrupt: false }
   try {
     const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed) ? (parsed as T[]) : []
+    return Array.isArray(parsed)
+      ? { items: parsed as T[], corrupt: false }
+      : { items: [], corrupt: true }
   } catch {
-    return []
+    return { items: [], corrupt: true }
   }
 }
 
@@ -448,7 +483,7 @@ async function readOptionalFile(path: string): Promise<string | null> {
 
 async function readKnowledgePagesLayout(
   packagePath: string,
-): Promise<KnowledgeStore | null> {
+): Promise<{ store: KnowledgeStore; skippedFiles: string[]; skippedPageNames: string[] } | null> {
   const indexPath = joinPackagePath(packagePath, KNOWLEDGE_INDEX_FILE)
   const indexRaw = await readOptionalFile(indexPath)
   if (indexRaw === null) return null
@@ -476,6 +511,8 @@ async function readKnowledgePagesLayout(
   const pages = new Array<NonNullable<ReturnType<typeof parsePageFile>> | undefined>(
     entries.length,
   )
+  const skippedFiles: string[] = []
+  const skippedPageNames: string[] = []
   let cursor = 0
   // Bound bridge traffic while overlapping independent page reads. Keep the
   // listing order deterministic, including duplicate-identity recovery.
@@ -487,7 +524,12 @@ async function readKnowledgePagesLayout(
       const raw = await readOptionalFile(entry.path)
       if (raw === null) continue
       const page = parsePageFile(raw)
-      if (!page) throw new Error(`Invalid knowledge page: ${entry.path}`)
+      if (!page) {
+        skippedFiles.push(entry.path)
+        skippedPageNames.push(entry.name)
+        console.warn(`[PureKnowledge] Skipping corrupt or unreadable page file: ${entry.path}`)
+        continue
+      }
       pages[position] = page
     }
   }
@@ -495,22 +537,35 @@ async function readKnowledgePagesLayout(
     const path = joinPackagePath(packagePath, fileName)
     const raw = await readOptionalFile(path)
     if (raw === null) return []
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed))
-      throw new Error(`Invalid knowledge history: ${path}`)
-    return parsed
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      if (!Array.isArray(parsed)) {
+        skippedFiles.push(path)
+        console.warn(`[PureKnowledge] Ignoring malformed JSON array in ${path}`)
+        return []
+      }
+      return parsed
+    } catch {
+      skippedFiles.push(path)
+      console.warn(`[PureKnowledge] Ignoring corrupt JSON file ${path}`)
+      return []
+    }
   }
   const [, activity, proposals] = await Promise.all([
     Promise.all(Array.from({ length: Math.min(8, entries.length) }, readPages)),
     readJsonArray(KNOWLEDGE_ACTIVITY_FILE),
     readJsonArray(KNOWLEDGE_PROPOSALS_FILE),
   ])
-  return assembleKnowledgeStore(
-    index,
-    pages.filter((page): page is KnowledgePage => Boolean(page)),
-    activity,
-    proposals,
-  )
+  return {
+    store: assembleKnowledgeStore(
+      index,
+      pages.filter((page): page is KnowledgePage => Boolean(page)),
+      activity,
+      proposals,
+    ),
+    skippedFiles,
+    skippedPageNames,
+  }
 }
 
 export function useKnowledgeWorkspace(
@@ -552,6 +607,8 @@ export function useKnowledgeWorkspace(
     revision: number
     reload: number
     signature: string | null
+    skippedPageNames: Set<string>
+    skippedWarning: Error | null
     /** What saves settled differently from what they were asked to save, for the saves queued behind them. */
     settled: Array<{ saved: KnowledgeStore; settled: KnowledgeStore }>
   } | null>(null)
@@ -564,6 +621,8 @@ export function useKnowledgeWorkspace(
       revision: 0,
       reload: 0,
       signature: null,
+      skippedPageNames: new Set(),
+      skippedWarning: null,
       settled: [],
     }
   }
@@ -578,7 +637,12 @@ export function useKnowledgeWorkspace(
   // Capture the import intent before the viewport resource is cleared. A held copy never imports: it is opened again
   // each time its page is, and the file would become a new page each time.
   useEffect(() => {
-    if (importFilePath && !heldCopy) setPendingImport(importFilePath)
+    if (!importFilePath) return
+    if (heldCopy) {
+      handledRef.current?.()
+      return
+    }
+    setPendingImport(importFilePath)
   }, [heldCopy, importFilePath])
 
   useEffect(() => {
@@ -595,15 +659,20 @@ export function useKnowledgeWorkspace(
         await saveChainRef.current
         if (cancelled) return
         if (heldCopy) workspace.signature = await packageSignature(packagePath).catch(() => null)
-        let nextStore: KnowledgeStore | null = await readKnowledgePagesLayout(
-          packagePath,
-        )
+        const loadedLayout = await readKnowledgePagesLayout(packagePath)
+        let nextStore: KnowledgeStore | null = loadedLayout?.store ?? null
+        let skippedFiles = loadedLayout?.skippedFiles ?? []
+        let skippedPageNames = loadedLayout?.skippedPageNames ?? []
         if (!nextStore) {
           if(boot.organisation) throw Error('Create this organisation’s knowledge library from its Knowledge workspace first. No personal library was opened or imported.')
           nextStore = await withKnowledgeWriter(async () => {
             // Another copy may have made it while this one waited its turn.
             const made = await readKnowledgePagesLayout(packagePath)
-            if (made) return made
+            if (made) {
+              skippedFiles = made.skippedFiles
+              skippedPageNames = made.skippedPageNames
+              return made.store
+            }
             // Migration: split whichever legacy blob exists into the
             // page-per-file layout, keeping the blob as a backup.
             const storeFilePath = resolveKnowledgeStoreFilePath(packagePath)
@@ -648,7 +717,16 @@ export function useKnowledgeWorkspace(
         if (!cancelled) {
           workspace.local = nextStore
           workspace.durable = nextStore
+          workspace.skippedPageNames = new Set(skippedPageNames)
+          workspace.skippedWarning = skippedFiles.length
+            ? new Error(
+                `Skipped unreadable knowledge file${skippedFiles.length === 1 ? '' : 's'}: ${skippedFiles.join(', ')}`,
+              )
+            : null
           setStore(nextStore)
+          if (workspace.skippedWarning) {
+            setError(workspace.skippedWarning)
+          }
         }
       } catch (loadError) {
         if (!cancelled) {
@@ -680,7 +758,8 @@ export function useKnowledgeWorkspace(
     await saveChainRef.current
     const revision = workspace.revision
     try {
-      const incoming = await readKnowledgePagesLayout(packagePath)
+      const reloaded = await readKnowledgePagesLayout(packagePath)
+      const incoming = reloaded?.store ?? null
       if (
         workspaceRef.current !== workspace ||
         request !== workspace.reload ||
@@ -693,7 +772,15 @@ export function useKnowledgeWorkspace(
         void reloadFromDisk()
         return
       }
-      if (!saveFailedRef.current) setError(null)
+      workspace.skippedPageNames = new Set(reloaded?.skippedPageNames ?? [])
+      workspace.skippedWarning = reloaded?.skippedFiles.length
+        ? new Error(
+            `Skipped unreadable knowledge file${reloaded.skippedFiles.length === 1 ? '' : 's'}: ${reloaded.skippedFiles.join(', ')}`,
+          )
+        : null
+      if (!saveFailedRef.current) {
+        setError(workspace.skippedWarning)
+      }
       // A look that found nothing new changes nothing and says nothing.
       if (workspace.durable && sameKnowledge(workspace.durable, incoming)) return
       const before = workspace.durable
@@ -796,17 +883,29 @@ export function useKnowledgeWorkspace(
     async (update: KnowledgeStoreUpdate) => {
       if (workspaceRef.current !== workspace || !workspace.local)
         throw new Error('The knowledge workspace is not ready to save.')
-      const nextStore =
-        typeof update === 'function'
-          ? update(workspace.local)
-          : withoutOlderPages(update, workspace.local)
-      if (nextStore.organisationId !== workspace.local.organisationId) throw new Error('A library cannot change its organisation binding.')
+      let nextStore: KnowledgeStore
+      try {
+        nextStore =
+          typeof update === 'function'
+            ? update(workspace.local)
+            : withoutOlderPages(update, workspace.local)
+        if (nextStore.organisationId !== workspace.local.organisationId) {
+          throw new Error('A library cannot change its organisation binding.')
+        }
+      } catch (updaterError) {
+        const err =
+          updaterError instanceof Error
+            ? updaterError
+            : new Error(String(updaterError))
+        if (workspaceRef.current === workspace) setError(err)
+        throw err
+      }
       workspace.local = nextStore
       ++workspace.revision
       ++workspace.pending
       setStore(nextStore)
       setSaving(true)
-      setError(null)
+      setError(workspace.skippedWarning)
       const run = saveChainRef.current.then(async () => {
         // This save was asked for before the ones ahead of it settled: it takes what they settled.
         const target = workspace.settled.reduce(
@@ -815,7 +914,7 @@ export function useKnowledgeWorkspace(
         )
         // Merge against acknowledged disk state, never optimistic UI state.
         const saved = workspace.durable
-          ? await saveKnowledgePackage(packagePath, workspace.durable, target, heldCopy)
+          ? await saveKnowledgePackage(packagePath, workspace.durable, target, heldCopy, workspace.skippedPageNames)
           : await writeKnowledgePages(packagePath, null, target).then(() => ({ store: target, notices: [] as string[], arrivals: false }))
         workspace.durable = saved.store
         if (saved.store !== target) {
@@ -838,7 +937,7 @@ export function useKnowledgeWorkspace(
       try {
         await run
         if (workspaceRef.current === workspace && workspace.pending === 1) {
-          setError(null)
+          setError(workspace.skippedWarning)
           setSaveFailed(false)
         }
       } catch (saveError) {
