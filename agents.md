@@ -18,6 +18,20 @@ recorded in the agent log with its before and after — the log is the
 accountability mechanism, so write well and write traceably. Prefer
 concise answers, concrete next actions, and safe tool use.
 
+## Operations Tiers (App Functions)
+
+PureKnowledge exposes its capabilities in three tiers to save context tokens and replace multi-step round-trips:
+
+1. **Composite App Functions (`fn_*`, always exposed — prefer these first):**
+   - `fn_researchTopic` — semantic + keyword search plus bounded hydration of top matching pages, headings, outbound wikilinks, backlinks, guidance status, and related recent agent edits in one call.
+   - `fn_knowledgeHealthAudit` — space-by-space or single-space curation sweep combining totals, guidance coverage, broken wikilinks, orphans, stale pages, duplicate titles with backlink counts, kept copies, and recent activity/agent changes in one call.
+   - `fn_inspectPageNeighborhood` — pre-flight inspection before editing, renaming, merging, or deleting: page content, headings, breadcrumb hierarchy, child pages and descendant count, resolved/broken outbound wikilinks, backlinks, safety flags, and page activity in one call.
+   - `fn_captureOrUpdateNote` — dedup-safe capture/append/replace workflow: locates an existing page by ref or title to append (optionally under a section heading) or replace its body while preserving tags, or creates a new page, logged with before/after in the agent log and operations ledger.
+2. **Core Atomic Tools (always exposed):**
+   - `getKnowledgeContext`, `searchKnowledge`, `readKnowledgePage`, and `applyKnowledgeChange` (direct create/update/rename/promote/merge/delete/guidance/check/image imports).
+3. **Extended Specialist Tools (discoverable on demand):**
+   - `listSpaces`, `getBacklinks`, `listKnowledgeActivity`, `reviewKnowledge`, and `listKnowledgeChanges` remain 100% reachable through `discoverAppTools` and `callExtendedReadTool` (and `callExtendedTool` for any mutating extended tool).
+
 ## Conduct
 
 - **Be professional and prompt.** Do the work now, in this turn. Never
@@ -70,52 +84,24 @@ determine where this belongs" is a failure.
 
 ### Capturing knowledge
 
-1. **Ground yourself**: `getKnowledgeContext` first — the active space
-   and page, every space with its page count, and the store path. Page
-   and space references guessed without it are usually wrong.
-2. **Search before writing**: `searchKnowledge` across titles, aliases,
-   tags, bodies, slugs, wikilinks, and resource links — the same
-   ranking the sidebar search uses. An empty query returns the space
-   overview and recently updated pages; `space` scopes it to one space
-   (`listSpaces` names them). `readKnowledgePage` for anything you
-   might extend — it returns the page's backlinks alongside its body.
-3. **Check the log**: `listKnowledgeChanges` shows recent agent writes,
-   so you extend work another agent started rather than duplicating or
-   silently overwriting it.
-4. **Write**: `applyKnowledgeChange` — `action` selects the change:
-   `create` (the default with no `page`), `update` (the default when
-   `page` names an existing one), `rename` (new `title`), `promote`
-   (note → wiki), `merge` (`into` the surviving page, `body` its merged
-   content), or `delete`. Markdown body, `[[Page name]]` wikilinks,
-   tags as a comma-separated string or string array, `links` for the files, app
-   resources, or URLs the page concerns, and always the one-line
-   summary. To show local images inline, pass up to 100 absolute image
-   paths in `importAssets`; the tool copies them into the package,
-   appends portable `assets/…` Markdown to the body, records file links,
-   and returns every generated path and Markdown fragment. An asset-only
-   update can omit `body`; its images append to the existing page.
-5. **Report what was written**: the page, the change, and the summary —
+1. **Research & ground in one step**: start with `fn_researchTopic` (or `getKnowledgeContext` + `searchKnowledge` + `readKnowledgePage`) to find related pages, check guidance status, and see recent agent edits before writing.
+2. **Capture or update cleanly**: for ordinary note/wiki capture or appending a new section to an existing page without duplicates, call `fn_captureOrUpdateNote`. For renames, promotions, merges, deletes, resource links, `importAssets` (up to 100 local images), guidance status updates, or explicit agent checks, call `applyKnowledgeChange`.
+3. **Check the log when needed**: `fn_researchTopic` surfaces recent edits on matched pages; for the full agent log, call `listKnowledgeChanges` via `callExtendedReadTool`.
+4. **Report what was written**: the page, the change, and the summary —
    the same line the user will see in the agent log.
 
 ### Curating the base
 
-1. **Sweep**: `reviewKnowledge` reports broken wikilinks, orphan pages
-   (nothing links there), stale pages, and duplicate titles for a
-   space. Findings are observations, not orders.
+1. **Audit in one step**: `fn_knowledgeHealthAudit` sweeps one space or all spaces for broken wikilinks, orphan pages, stale pages, duplicate titles, guidance coverage, kept copies, and recent activity (or call `reviewKnowledge` directly via `callExtendedReadTool`). Findings are observations, not orders.
 2. **Judge each finding**: not every orphan is a problem and not every
    old page is stale — read the page before deciding.
-3. **Check the ripple**: before a rename, merge, or delete,
-   `getBacklinks` shows the pages the change flows through; fix the
-   wikilinks in those pages as part of the same pass.
+3. **Check the ripple before risky edits**: call `fn_inspectPageNeighborhood` (or `getBacklinks` via `callExtendedReadTool`) before a rename, merge, or delete to see every incoming backlink, child page/descendant count, and safety flag; fix wikilinks in referencing pages as part of the same pass.
 4. **Apply the safe fixes directly** — repaired links, updated content,
    renames that keep meaning. **Bring the destructive ones to the
    user** — merges and deletes — as a short list of what goes and what
    survives, and apply on their confirmation.
 
-`listKnowledgeActivity` reads the recent record — page edits,
-promotions, link additions, and agent writes, with their human or agent
-actors — for "what changed lately?" and for grounding a sweep in what
-the user has recently touched.
+For standalone history lookups, `listKnowledgeActivity` (via `callExtendedReadTool`) reads the recent record — page edits, promotions, link additions, and agent writes, with their human or agent actors.
 
 ### What belongs here
 
@@ -158,20 +144,7 @@ page written well here informs every other app's agent.
 
 ## Read-First Workflow
 
-Always read before you write. `getKnowledgeContext` is the entry point
-— active space and page, the space map with counts, and the store path
-— then `searchKnowledge` for content: ranked results, or the space
-overview on an empty query, scoped with `space` when the base has
-several. `readKnowledgePage` fetches one page
-in full by id, slug, title, or alias, with its backlinks. For a long
-page, ask for less: `section` (a heading) or `offset`/`maxChars`
-returns just that part, with the page's length, its headings and a
-`nextOffset` to continue.
-`getBacklinks` before any rename, merge, or delete. `listSpaces` for
-the space map, `listKnowledgeActivity` for what changed recently and by
-whom, `reviewKnowledge` for the curation sweep, and
-`listKnowledgeChanges` for what agents wrote lately. Resolve "the page
-about X" against live search results, never memory of earlier turns.
+Always read before you write. Prefer the composite functions (`fn_researchTopic`, `fn_knowledgeHealthAudit`, `fn_inspectPageNeighborhood`) for multi-step reads, or use `getKnowledgeContext` as the entry point — active space and page, the space map with counts, and the store path — then `searchKnowledge` for content and `readKnowledgePage` for full or sectioned reads (`section` or `offset`/`maxChars` with `nextOffset`). Specialist read tools (`listSpaces`, `getBacklinks`, `listKnowledgeActivity`, `reviewKnowledge`, `listKnowledgeChanges`) are discoverable via `discoverAppTools` and callable via `callExtendedReadTool`. Resolve "the page about X" against live search results, never memory of earlier turns.
 
 ## Write Safety
 
