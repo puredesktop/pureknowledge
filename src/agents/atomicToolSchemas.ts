@@ -1,0 +1,338 @@
+import type {
+  AppAtomicToolDefinition,
+  AppOperationExposure,
+  AppOperationRisk,
+} from '@purescience/platform-ui/bridge/appFunctions'
+
+export type AtomicToolSchemaEntry = Omit<
+  AppAtomicToolDefinition<unknown>,
+  'opClass' | 'run'
+> & {
+  exposure: AppOperationExposure
+  risk: AppOperationRisk
+}
+
+/**
+ * Complete, lossless catalog of all 9 PureKnowledge atomic tools.
+ *
+ * Exposure policy:
+ *   - `exposure: 'always'` (4 core tools): indispensable direct read/write verbs
+ *     (`getKnowledgeContext`, `searchKnowledge`, `readKnowledgePage`, `applyKnowledgeChange`).
+ *   - `exposure: 'extended'` (5 specialist tools): hidden from default prompt,
+ *     100% discoverable via `discoverAppTools` and callable via
+ *     `callExtendedReadTool` (read) or `callExtendedTool` (write / destructive).
+ */
+export const PUREKNOWLEDGE_ATOMIC_TOOL_SCHEMAS: readonly AtomicToolSchemaEntry[] = [
+  // ── Core atomic tools (exposure: 'always') ──
+  {
+    name: 'getKnowledgeContext',
+    category: 'context',
+    exposure: 'always',
+    risk: 'read',
+    description:
+      'Call this first: compact context for the knowledge base — active space and page, every space with its page count, wiki/note totals, and the store path. Ground page and space references here before using the other tools.',
+    requiresApproval: false,
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'searchKnowledge',
+    category: 'search',
+    exposure: 'always',
+    risk: 'read',
+    description:
+      'Search the knowledge base by meaning and by words across titles, aliases, tags, page bodies, slugs, wikilinks, and resource links — the same ranking the sidebar search uses. Ask in plain language; an exact page name comes first. searchedBy says whether meaning was used and searchNote says why not, so if it says words, rephrase with words the page is likely to use. Empty query lists pages plus the space overview. Matching Current guidance ranks first; relevance (or recency for an empty query) is retained within each status group. getKnowledgeContext names the active space.',
+    requiresApproval: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+        },
+        limit: {
+          type: 'number',
+        },
+        space: {
+          type: 'string',
+          description: 'Limit results to one space, by id or name. listSpaces names them.',
+        },
+        status: {
+          type: 'string',
+          enum: ['all', 'unmarked', 'draft', 'current', 'retired'],
+          description:
+            'Optional guidance status filter. Current matching guidance ranks first; retired pages remain available.',
+        },
+        includeDrafts: {
+          type: 'boolean',
+          description:
+            'Explicitly inspect working policy drafts and archived pages. False/default reads only active, human-published policy text; drafts and archived pages are not current company policy.',
+        },
+      },
+    },
+  },
+  {
+    name: 'readKnowledgePage',
+    category: 'pages',
+    exposure: 'always',
+    risk: 'read',
+    description:
+      "Read one knowledge page in full by id, slug, title, or alias. getKnowledgeContext and searchKnowledge supply the references. For a long page, ask for less: section (a heading) or offset/maxChars returns just that part, with bodyCharacters, the page's headings (sections) and nextOffset to continue.",
+    requiresApproval: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        page: {
+          type: 'string',
+        },
+        section: {
+          type: 'string',
+          description:
+            'Optional: a heading on the page. Returns only that heading and its content, up to the next heading of the same or higher level.',
+        },
+        offset: {
+          type: 'integer',
+          minimum: 0,
+          description:
+            'Optional: start at this character of the body. Pass back nextOffset to continue.',
+        },
+        maxChars: {
+          type: 'integer',
+          minimum: 1,
+          description: 'Optional: return at most this many characters of the body.',
+        },
+        includeDrafts: {
+          type: 'boolean',
+          description:
+            'Explicitly inspect working policy drafts and archived pages. False/default reads only active, human-published policy text; drafts and archived pages are not current company policy.',
+        },
+      },
+      required: ['page'],
+    },
+  },
+  {
+    name: 'applyKnowledgeChange',
+    category: 'editing',
+    exposure: 'always',
+    risk: 'destructive',
+    description:
+      'Write a change to the wiki directly: create a page, update, rename, promote a note to wiki, merge into another page, or delete. Body is markdown; [[Page name]] creates wikilinks. importAssets copies up to 100 local images into the package and appends portable inline Markdown. Every write is recorded in the agent log with before/after and in the suite operations ledger. Call getKnowledgeContext first to ground the space and page. Explicit action guidance changes guidanceStatus (draft/current/retired or null to clear) and replacementPageId (exact existing page ID in this notebook or null). Explicit action check records checkedAt (ISO UTC date/time) attributed to the named agent, never a human. Content edits never refresh lastChecked. Current is a recorded judgement, not automatic correctness.',
+    requiresApproval: true,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        page: {
+          type: 'string',
+        },
+        title: {
+          type: 'string',
+        },
+        body: {
+          type: 'string',
+          description:
+            'Page Markdown. Required for create/update unless importAssets supplies the new content; an asset-only update appends to the existing body.',
+        },
+        summary: {
+          type: 'string',
+        },
+        tags: {
+          description: 'Tags as a comma-separated string or an array of strings.',
+          anyOf: [
+            {
+              type: 'string',
+            },
+            {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+            },
+          ],
+        },
+        agentName: {
+          type: 'string',
+          description:
+            'Agent attribution for the change. For action check, defaults to Assistant when omitted; the check always records an agent, never a human.',
+        },
+        parent: {
+          type: 'string',
+        },
+        kind: {
+          type: 'string',
+          enum: ['wiki', 'note'],
+        },
+        action: {
+          type: 'string',
+          enum: [
+            'create',
+            'update',
+            'rename',
+            'promote',
+            'delete',
+            'merge',
+            'guidance',
+            'check',
+          ],
+          description:
+            'What to write. Defaults to update when page names an existing page, create otherwise. rename needs the new title; promote turns a note into a wiki page; merge needs into (the surviving page) and body (its merged content); delete removes the page (and its children).',
+        },
+        into: {
+          type: 'string',
+          description:
+            'merge only: the surviving page (id, slug, title, or alias) the page merges into.',
+        },
+        links: {
+          type: 'array',
+          description:
+            'Resource links to attach on accept: files, app resources, or URLs the page concerns.',
+          items: {
+            type: 'object',
+            properties: {
+              type: {
+                type: 'string',
+                enum: ['file', 'app', 'url', 'resource'],
+              },
+              title: {
+                type: 'string',
+              },
+              path: {
+                type: 'string',
+              },
+              appSlug: {
+                type: 'string',
+              },
+              resourceId: {
+                type: 'string',
+              },
+              url: {
+                type: 'string',
+              },
+            },
+            required: ['title'],
+          },
+        },
+        importAssets: {
+          type: 'array',
+          maxItems: 100,
+          description:
+            'Local images to copy into the knowledge package and append inline to body. Omit this field or use an empty array for text-only changes. Each copied image is also recorded as a file link. Supported: PNG, JPEG, GIF, WebP, SVG.',
+          items: {
+            type: 'object',
+            properties: {
+              sourcePath: {
+                type: 'string',
+                description:
+                  'Absolute path to a local image outside or inside the package.',
+              },
+              alt: {
+                type: 'string',
+                description:
+                  'Accessible image description; defaults to the source filename.',
+              },
+            },
+            required: ['sourcePath'],
+          },
+        },
+        guidanceStatus: {
+          type: ['string', 'null'],
+          enum: ['draft', 'current', 'retired', null],
+        },
+        replacementPageId: {
+          type: ['string', 'null'],
+        },
+        checkedAt: {
+          type: 'string',
+          description: 'Explicit check time, ISO UTC date/time, for action check only.',
+        },
+      },
+      required: ['summary'],
+    },
+  },
+
+  // ── Extended specialist tools (exposure: 'extended') ──
+  {
+    name: 'listSpaces',
+    category: 'spaces',
+    exposure: 'extended',
+    risk: 'read',
+    description: 'List knowledge spaces with page counts and which is active.',
+    requiresApproval: false,
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
+    name: 'getBacklinks',
+    category: 'links',
+    exposure: 'extended',
+    risk: 'read',
+    description:
+      'List the pages whose bodies wikilink to one page. Read before a rename, merge, or delete — these are the pages the change ripples through.',
+    requiresApproval: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        page: {
+          type: 'string',
+        },
+      },
+      required: ['page'],
+    },
+  },
+  {
+    name: 'listKnowledgeActivity',
+    category: 'audit',
+    exposure: 'extended',
+    risk: 'read',
+    description:
+      'Recent knowledge-base activity, newest first: page edits, promotions, link additions, and agent writes, with the human or agent actor. Optionally scoped to one page.',
+    requiresApproval: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        page: {
+          type: 'string',
+        },
+        limit: {
+          type: 'number',
+        },
+      },
+    },
+  },
+  {
+    name: 'reviewKnowledge',
+    category: 'curation',
+    exposure: 'extended',
+    risk: 'read',
+    description:
+      "Curation sweep over a space: broken wikilinks, orphan pages, stale pages, and duplicate titles. Read-only — apply the fixes worth making with applyKnowledgeChange; destructive ones at the user's direction.",
+    requiresApproval: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        space: {
+          type: 'string',
+        },
+      },
+    },
+  },
+  {
+    name: 'listKnowledgeChanges',
+    category: 'audit',
+    exposure: 'extended',
+    risk: 'read',
+    description:
+      'The agent log: recent agent writes to the wiki, newest first, with change type, actor, and summary. Check before repeating work another agent already did.',
+    requiresApproval: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: {
+          type: 'number',
+        },
+      },
+    },
+  },
+]

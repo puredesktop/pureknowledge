@@ -4,7 +4,10 @@ import {
   formatAgentToolJson,
   readAgentToolStringArg,
 } from '@purescience/platform-ui/bridge/agentToolHelpers'
-import type { AgentToolHandlerResult } from '@purescience/platform-ui/bridge/react/usePlatformAgentTools'
+import type {
+  AgentToolHandlerResult,
+  AgentToolInvokeContext,
+} from '@purescience/platform-ui/bridge/react/usePlatformAgentTools'
 import { recordOperation } from '../bridge/platformBridge'
 import {
   importKnowledgeImages,
@@ -37,7 +40,7 @@ function requireStore(
   return context.store
 }
 
-function pageByRef(
+export function pageByRef(
   store: KnowledgeStore,
   ref: string,
 ): KnowledgePage | { error: string } | undefined {
@@ -65,7 +68,7 @@ function pageByRef(
   return matches[0]
 }
 
-function safeEffectivePage(
+export function safeEffectivePage(
   page: KnowledgePage,
   includeDrafts: boolean,
 ): { page: KnowledgePage | null; error?: string } {
@@ -79,7 +82,7 @@ function safeEffectivePage(
   }
 }
 
-function spaceByRef(
+export function spaceByRef(
   store: KnowledgeStore,
   ref: string,
 ): KnowledgeStore['spaces'][number] | undefined {
@@ -316,7 +319,7 @@ export function readKnowledgePageHandler(
 }
 
 /** Markdown headings of a page body with their character offsets. */
-function pageHeadings(body: string) {
+export function pageHeadings(body: string) {
   const headings: { heading: string; level: number; offset: number }[] = []
   let offset = 0
   let fence: '`' | '~' | null = null
@@ -875,4 +878,28 @@ export function listKnowledgeChangesHandler(
       note: 'The agent log: every agent write with its before/after, newest first. Check it before repeating work another agent already did.',
     }),
   }
+}
+
+export type PureKnowledgeAtomicRunner = (
+  ctx: KnowledgeAgentToolContext,
+  args: Record<string, unknown>,
+  invoke: AgentToolInvokeContext,
+) => Promise<AgentToolHandlerResult>
+
+/** Complete runner map for all 9 PureKnowledge atomic tools. */
+export const PUREKNOWLEDGE_ATOMIC_RUNNERS: Record<
+  string,
+  PureKnowledgeAtomicRunner
+> = {
+  getKnowledgeContext: async ctx => getKnowledgeContextHandler(ctx),
+  searchKnowledge: (ctx, args) => searchKnowledgeHandler(ctx, args),
+  readKnowledgePage: async (ctx, args) => readKnowledgePageHandler(ctx, args),
+  listSpaces: async ctx => listSpacesHandler(ctx),
+  getBacklinks: async (ctx, args) => getBacklinksHandler(ctx, args),
+  listKnowledgeActivity: async (ctx, args) =>
+    listKnowledgeActivityHandler(ctx, args),
+  reviewKnowledge: async (ctx, args) => reviewKnowledgeHandler(ctx, args),
+  applyKnowledgeChange: (ctx, args) => applyKnowledgeChangeHandler(ctx, args),
+  listKnowledgeChanges: async (ctx, args) =>
+    listKnowledgeChangesHandler(ctx, args),
 }

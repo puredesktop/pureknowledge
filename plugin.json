@@ -35,20 +35,219 @@
     "agents": {
       "tools": [
         {
+          "name": "fn_researchTopic",
+          "risk": "read",
+          "description": "Research a topic across the knowledge base in one call: runs semantic and keyword search, hydrates the top matching pages with bounded excerpts, markdown headings, outbound wikilinks, backlinks, resource links, and guidance status, and includes recent agent edits touching those pages.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "Plain-language question, topic, or keywords to research across titles, aliases, tags, bodies, and links."
+              },
+              "space": {
+                "type": "string",
+                "description": "Optional space id or exact name to scope the research."
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "all",
+                  "unmarked",
+                  "draft",
+                  "current",
+                  "retired"
+                ],
+                "description": "Optional guidance status filter; Current guidance ranks first within matching results."
+              },
+              "includeDrafts": {
+                "type": "boolean",
+                "description": "Explicitly include working policy drafts and archived pages (default false: active published text only)."
+              },
+              "maxPages": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 8,
+                "description": "Maximum number of top matching pages to hydrate with excerpts, headings, and link graphs (default 3)."
+              },
+              "maxCharsPerPage": {
+                "type": "integer",
+                "minimum": 200,
+                "maximum": 8000,
+                "description": "Maximum body characters returned per hydrated page (default 2500)."
+              },
+              "includeRecentChanges": {
+                "type": "boolean",
+                "description": "Include recent agent log entries touching any hydrated page (default true)."
+              }
+            },
+            "required": [
+              "query"
+            ]
+          },
+          "requiresApproval": false
+        },
+        {
+          "name": "fn_knowledgeHealthAudit",
+          "risk": "read",
+          "description": "Audit knowledge-base health across one space or all spaces in one call: aggregates space totals, guidance status coverage, broken wikilinks, orphan pages, stale pages, duplicate titles, backlink counts, kept copies, and recent human and agent activity.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "space": {
+                "type": "string",
+                "description": "Optional space id, exact name, or \"active\" to audit one space; omit to audit every space in the library."
+              },
+              "staleDays": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3650,
+                "description": "Days without an update before a page is flagged stale (default 90)."
+              },
+              "includeActivity": {
+                "type": "boolean",
+                "description": "Include recent human/agent activity and recent agent writes (default true)."
+              },
+              "activityLimit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50,
+                "description": "Maximum number of recent activity and agent-change entries to include (default 15)."
+              }
+            }
+          },
+          "requiresApproval": false
+        },
+        {
+          "name": "fn_inspectPageNeighborhood",
+          "risk": "read",
+          "description": "Inspect a knowledge page together with its full neighborhood before editing, renaming, merging, or deleting: returns page content, headings, breadcrumb hierarchy, child pages and descendant count, resolved and broken outbound wikilinks, incoming backlinks, safety flags, and recent page activity.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "string",
+                "description": "Page id, slug, title, or alias to inspect together with its links, hierarchy, and history."
+              },
+              "includeBody": {
+                "type": "boolean",
+                "description": "Include the markdown body excerpt (default true)."
+              },
+              "maxChars": {
+                "type": "integer",
+                "minimum": 100,
+                "maximum": 20000,
+                "description": "Maximum body characters to return when includeBody is true (default 6000)."
+              },
+              "includeDrafts": {
+                "type": "boolean",
+                "description": "Explicitly inspect working policy drafts and archived pages (default false)."
+              },
+              "activityLimit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50,
+                "description": "Maximum number of recent activity and agent-change entries scoped to this page (default 10)."
+              }
+            },
+            "required": [
+              "page"
+            ]
+          },
+          "requiresApproval": false
+        },
+        {
+          "name": "fn_captureOrUpdateNote",
+          "risk": "write",
+          "description": "Capture new knowledge or update an existing wiki page or note in one call without creating duplicate titles: locates an existing page by reference or title to append (optionally under a markdown heading) or replace its body while preserving existing tags, or creates a new page, recording before/after in the agent log and operations ledger.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "string",
+                "description": "Optional existing page id, slug, title, or alias to target explicitly."
+              },
+              "title": {
+                "type": "string",
+                "description": "Page title to locate in the target space or use when creating a new page. Required unless \"page\" targets an existing page."
+              },
+              "content": {
+                "type": "string",
+                "description": "Markdown content to write or append. Supports [[Page name]] wikilinks."
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "upsert",
+                  "append",
+                  "replace"
+                ],
+                "description": "How to apply content: \"upsert\" (default) appends to an existing matching page or creates a new one; \"append\" requires an existing page and appends; \"replace\" overwrites an existing page body or creates a new page."
+              },
+              "sectionHeading": {
+                "type": "string",
+                "description": "Optional heading text (e.g. \"Decisions\") inserted as a level-2 markdown heading above the captured content when creating or appending."
+              },
+              "space": {
+                "type": "string",
+                "description": "Optional target space id or exact name (defaults to parent space, existing page space, or active space)."
+              },
+              "parent": {
+                "type": "string",
+                "description": "Optional parent page id, slug, title, or alias to organize a newly created page under."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "wiki",
+                  "note"
+                ],
+                "description": "Page kind when creating a new page (\"wiki\" default for durable reference, \"note\" for informal capture)."
+              },
+              "tags": {
+                "description": "Tags as a comma-separated string or array of strings; merged without removing existing tags on append/upsert.",
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                ]
+              },
+              "summary": {
+                "type": "string",
+                "description": "One-line summary explaining why this capture or update matters (recorded in the agent log and operations ledger)."
+              },
+              "agentName": {
+                "type": "string",
+                "description": "Agent attribution recorded in the log (defaults to \"Assistant\")."
+              }
+            },
+            "required": [
+              "content",
+              "summary"
+            ]
+          },
+          "requiresApproval": true
+        },
+        {
           "name": "getKnowledgeContext",
           "risk": "read",
-          "description": "Call this first: compact context for the knowledge base \u2014 active space and page, every space with its page count, wiki/note totals, and the store path. Ground page and space references here before using the other tools.",
-          "requiresApproval": false,
+          "description": "Call this first: compact context for the knowledge base — active space and page, every space with its page count, wiki/note totals, and the store path. Ground page and space references here before using the other tools.",
           "inputSchema": {
             "type": "object",
             "properties": {}
-          }
+          },
+          "requiresApproval": false
         },
         {
           "name": "searchKnowledge",
           "risk": "read",
-          "description": "Search the knowledge base by meaning and by words across titles, aliases, tags, page bodies, slugs, wikilinks, and resource links \u2014 the same ranking the sidebar search uses. Ask in plain language; an exact page name comes first. searchedBy says whether meaning was used and searchNote says why not, so if it says words, rephrase with words the page is likely to use. Empty query lists pages plus the space overview. Matching Current guidance ranks first; relevance (or recency for an empty query) is retained within each status group. getKnowledgeContext names the active space.",
-          "requiresApproval": false,
+          "description": "Search the knowledge base by meaning and by words across titles, aliases, tags, page bodies, slugs, wikilinks, and resource links — the same ranking the sidebar search uses. Ask in plain language; an exact page name comes first. searchedBy says whether meaning was used and searchNote says why not, so if it says words, rephrase with words the page is likely to use. Empty query lists pages plus the space overview. Matching Current guidance ranks first; relevance (or recency for an empty query) is retained within each status group. getKnowledgeContext names the active space.",
           "inputSchema": {
             "type": "object",
             "properties": {
@@ -78,13 +277,13 @@
                 "description": "Explicitly inspect working policy drafts and archived pages. False/default reads only active, human-published policy text; drafts and archived pages are not current company policy."
               }
             }
-          }
+          },
+          "requiresApproval": false
         },
         {
           "name": "readKnowledgePage",
           "risk": "read",
           "description": "Read one knowledge page in full by id, slug, title, or alias. getKnowledgeContext and searchKnowledge supply the references. For a long page, ask for less: section (a heading) or offset/maxChars returns just that part, with bodyCharacters, the page's headings (sections) and nextOffset to continue.",
-          "requiresApproval": false,
           "inputSchema": {
             "type": "object",
             "properties": {
@@ -113,63 +312,6 @@
             "required": [
               "page"
             ]
-          }
-        },
-        {
-          "name": "listSpaces",
-          "risk": "read",
-          "description": "List knowledge spaces with page counts and which is active.",
-          "inputSchema": {
-            "type": "object",
-            "properties": {}
-          },
-          "requiresApproval": false
-        },
-        {
-          "name": "getBacklinks",
-          "risk": "read",
-          "description": "List the pages whose bodies wikilink to one page. Read before a rename, merge, or delete \u2014 these are the pages the change ripples through.",
-          "inputSchema": {
-            "type": "object",
-            "properties": {
-              "page": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "page"
-            ]
-          },
-          "requiresApproval": false
-        },
-        {
-          "name": "listKnowledgeActivity",
-          "risk": "read",
-          "description": "Recent knowledge-base activity, newest first: page edits, promotions, link additions, and agent writes, with the human or agent actor. Optionally scoped to one page.",
-          "inputSchema": {
-            "type": "object",
-            "properties": {
-              "page": {
-                "type": "string"
-              },
-              "limit": {
-                "type": "number"
-              }
-            }
-          },
-          "requiresApproval": false
-        },
-        {
-          "name": "reviewKnowledge",
-          "risk": "read",
-          "description": "Curation sweep over a space: broken wikilinks, orphan pages, stale pages, and duplicate titles. Read-only \u2014 apply the fixes worth making with applyKnowledgeChange; destructive ones at the user's direction.",
-          "inputSchema": {
-            "type": "object",
-            "properties": {
-              "space": {
-                "type": "string"
-              }
-            }
           },
           "requiresApproval": false
         },
@@ -177,7 +319,6 @@
           "name": "applyKnowledgeChange",
           "risk": "destructive",
           "description": "Write a change to the wiki directly: create a page, update, rename, promote a note to wiki, merge into another page, or delete. Body is markdown; [[Page name]] creates wikilinks. importAssets copies up to 100 local images into the package and appends portable inline Markdown. Every write is recorded in the agent log with before/after and in the suite operations ledger. Call getKnowledgeContext first to ground the space and page. Explicit action guidance changes guidanceStatus (draft/current/retired or null to clear) and replacementPageId (exact existing page ID in this notebook or null). Explicit action check records checkedAt (ISO UTC date/time) attributed to the named agent, never a human. Content edits never refresh lastChecked. Current is a recorded judgement, not automatic correctness.",
-          "requiresApproval": true,
           "inputSchema": {
             "type": "object",
             "properties": {
@@ -323,21 +464,89 @@
             "required": [
               "summary"
             ]
-          }
+          },
+          "requiresApproval": true
         },
         {
-          "name": "listKnowledgeChanges",
+          "name": "discoverAppTools",
           "risk": "read",
-          "description": "The agent log: recent agent writes to the wiki, newest first, with change type, actor, and summary. Check before repeating work another agent already did.",
+          "requiresApproval": false,
+          "description": "Discover PureKnowledge's extended specialist tools (5 tools across audit, curation, links, spaces) and composite functions (4 workflows). Prefer calling exposed composite functions and core tools first; use discoverAppTools when an edge case needs a specialist tool, then call it via callExtendedReadTool (for read-only tools) or callExtendedTool (for mutating tools).",
           "inputSchema": {
             "type": "object",
             "properties": {
-              "limit": {
-                "type": "number"
+              "query": {
+                "type": "string",
+                "description": "Optional keywords describing the capability you need (e.g. \"audit\", \"curation\", \"links\", \"spaces\")."
+              },
+              "category": {
+                "type": "string",
+                "description": "Optional category filter (audit, curation, links, spaces, or \"all\")."
+              },
+              "names": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Optional exact tool names to fetch full JSON input schemas for."
+              },
+              "includeFunctions": {
+                "type": "boolean",
+                "description": "Include already-exposed composite functions and core tools in the listing (default false: searches extended tools first)."
               }
             }
+          }
+        },
+        {
+          "name": "callExtendedReadTool",
+          "risk": "read",
+          "requiresApproval": false,
+          "description": "Call one of PureKnowledge's read-only extended specialist tools discovered via discoverAppTools (categories: audit, curation, links, spaces). Strictly refuses mutating, destructive, external, or release tools.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "tool": {
+                "type": "string",
+                "description": "Exact name of a read-only extended tool from discoverAppTools."
+              },
+              "arguments": {
+                "type": "object",
+                "description": "Arguments object matching the tool’s inputSchema."
+              }
+            },
+            "required": [
+              "tool"
+            ]
+          }
+        },
+        {
+          "name": "callExtendedTool",
+          "risk": "write",
+          "requiresApproval": true,
+          "riskWhen": {
+            "confirmDestructive": "destructive"
           },
-          "requiresApproval": false
+          "description": "Call one of PureKnowledge's mutating extended specialist tools discovered via discoverAppTools (categories: audit, curation, links, spaces). For destructive tools, set confirmDestructive: true after checking with the user. Strictly refuses read-only tools (use callExtendedReadTool), external tools, permanent-delete tools, and release tools.",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "tool": {
+                "type": "string",
+                "description": "Exact name of a mutating extended tool from discoverAppTools."
+              },
+              "arguments": {
+                "type": "object",
+                "description": "Arguments object matching the tool’s inputSchema."
+              },
+              "confirmDestructive": {
+                "type": "boolean",
+                "description": "Required (true) when calling an extended tool marked risk: \"destructive\"."
+              }
+            },
+            "required": [
+              "tool"
+            ]
+          }
         }
       ]
     },
